@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>學生作答頁｜家教診斷系統</title>
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="./smart-system.css">
+  </head>
+  <body data-page="student">
+    <header class="top-nav">
+      <div class="brand">
+        <span class="brand-mark">筆</span>
+        <span>家教診斷系統｜學生作答頁</span>
+      </div>
+      <nav class="nav-links" aria-label="頁面導覽">
+        <a href="./teacher.html">老師版</a>
+        <a class="active" href="./student.html">學生版</a>
+      </nav>
+    </header>
+
+    <main class="shell student-layout">
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Student Quiz</p>
+          <h1>請專心完成這份診斷測驗</h1>
+          <p>作答完成後送出即可，診斷報告會交給老師查看。</p>
+        </div>
+        <div class="summary-grid">
+          <div>
+            <span>學生</span>
+            <strong id="quizStudent">尚未建立</strong>
+          </div>
+          <div>
+            <span>範圍</span>
+            <strong id="quizScope">請老師先建立測驗</strong>
+          </div>
+          <div>
+            <span>題數</span>
+            <strong id="quizCount">0</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-title">
+          <div>
+            <p class="eyebrow">Quiz</p>
+            <h2>測驗題目</h2>
+          </div>
+          <button id="submitStudentBtn" class="primary-btn" type="button">送出答案</button>
+        </div>
+        <div id="emptyQuiz" class="notice">目前沒有可作答的測驗，請老師先建立測驗。</div>
+        <div id="doneBox" class="student-done hidden">
+          <strong>作答完成</strong>
+          <p>答案已送出，請回到老師端查看分析報告。</p>
+        </div>
+        <div id="questionList" class="question-list"></div>
+      </section>
+    </main>
+
+    <script src="./smart-system.js"></script>
+  </body>
+</html>
