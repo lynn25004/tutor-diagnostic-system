@@ -285,6 +285,7 @@ function initTeacher() {
   document.querySelector("#exportRecordBtn").addEventListener("click", exportRecord);
   document.querySelector("#syncSourcesBtn").addEventListener("click", syncOfficialSources);
   document.querySelector("#refreshImportBtn").addEventListener("click", renderImportPanel);
+  document.querySelector("#printTeachingBtn").addEventListener("click", () => window.print());
 
   renderSources();
   renderImportPanel();
@@ -739,6 +740,7 @@ function buildTeaching(submission) {
   const similar = makeSimilarExample(baseQuestion);
   const lesson = lessonBlueprint(submission, main, baseQuestion);
   const practiceSet = makePracticeSet(baseQuestion, main);
+  const materialPack = buildMaterialPack(submission, main, baseQuestion, similar);
 
   return {
     title: `${submission.config.gradeLabel} ${submission.config.subjectLabel} 補強教材：${main.skill}`,
@@ -783,6 +785,7 @@ function buildTeaching(submission) {
     similar,
     guidedPractice: practiceSet.guided,
     independentPractice: practiceSet.independent,
+    materialPack,
     practice: [
       {
         level: "A 基礎確認",
@@ -961,6 +964,110 @@ function makePracticeSet(baseQuestion, main) {
   };
 }
 
+function buildMaterialPack(submission, main, baseQuestion, similar) {
+  const config = submission.config;
+  const focusSubject = baseQuestion.subject || (config.subject === "all" ? subjectOrder[config.stage][0] : config.subject);
+  const wrongQuestions = submission.questions.filter((question) => submission.answers[question.id] !== question.answer);
+  const generated = [];
+
+  for (let index = 1; index <= 12; index += 1) {
+    const subject = config.subject === "all"
+      ? subjectOrder[config.stage][(index - 1) % subjectOrder[config.stage].length]
+      : focusSubject;
+    generated.push(makeGeneratedQuestion({ ...config, id: `${submission.id}-material` }, subject, 80 + index));
+  }
+
+  const exercisePool = uniqueByPrompt([
+    ...wrongQuestions,
+    ...submission.questions,
+    ...generated
+  ]);
+
+  const classExercises = exercisePool.slice(0, 5).map((question, index) => normalizeExercise(question, index + 1, index < 2 ? "基礎暖身" : "課堂練習"));
+  const homeworkExercises = exercisePool.slice(5, 13).map((question, index) => normalizeExercise(question, index + 1, index < 4 ? "基礎熟練" : index < 7 ? "應用遷移" : "挑戰題"));
+  const exitTicket = exercisePool.slice(13, 15).map((question, index) => normalizeExercise(question, index + 1, "下課短測"));
+
+  if (exitTicket.length < 2) {
+    generated.slice(0, 2 - exitTicket.length).forEach((question, index) => {
+      exitTicket.push(normalizeExercise(question, exitTicket.length + index + 1, "下課短測"));
+    });
+  }
+
+  return {
+    teacherPrep: {
+      diagnosis: submission.report.diagnosis,
+      focus: `${main.label}｜${main.skill}`,
+      objective: `本次課程先把「${main.skill}」從會不會做，推進到能說出方法、能改題、能檢查答案。`,
+      materials: ["學生講義 1 份", "課堂練習題本 1 份", "回家作業 1 份", "解答解析 1 份"],
+      timing: ["5 分鐘暖身", "15 分鐘概念講解", "20 分鐘示範與引導", "25 分鐘課堂練習", "10 分鐘錯因整理與短測"]
+    },
+    studentHandout: {
+      title: `${config.gradeLabel} ${subjectLabels[focusSubject]} 學生講義：${main.skill}`,
+      beforeClass: [
+        "今天要先學會找題目真正問的是什麼。",
+        "每題都要留下關鍵線索，不只留下答案。",
+        "答錯時要知道錯在哪一步，這比只改成正確答案更重要。"
+      ],
+      keyMethod: [
+        "第一步：圈出題目問法。",
+        "第二步：框出有用條件，刪除干擾資訊。",
+        "第三步：選擇概念或方法。",
+        "第四步：寫出理由，最後檢查答案是否合理。"
+      ],
+      workedExample: {
+        prompt: baseQuestion.prompt,
+        answer: baseQuestion.answer,
+        explanation: baseQuestion.explanation,
+        studentBlanks: ["我看到的關鍵字：__________", "我使用的方法：__________", "我檢查答案的方式：__________"]
+      },
+      similarPrompt: similar.prompt
+    },
+    classExercises,
+    homeworkExercises,
+    exitTicket,
+    answerKey: [...classExercises, ...homeworkExercises, ...exitTicket].map((item) => ({
+      label: `${item.level} ${item.no}`,
+      answer: item.answer,
+      explanation: item.explanation
+    })),
+    parentSummary: [
+      `${config.studentName} 目前最需要優先加強的是「${main.skill}」。`,
+      `本次課程會先讓學生學會找關鍵線索、說出解題理由，再做同型題與變化題。`,
+      `回家練習不以題數為唯一目標，每題都要留下關鍵字與錯因，方便下次課追蹤。`,
+      `若短測達 80% 以上，下一步會提高題目整合度；若未達標，會先回補前置概念。`
+    ],
+    teacherChecklist: [
+      "學生能否自己說出題目問法？",
+      "學生能否分辨有用條件與干擾資訊？",
+      "學生是否只會記答案，還是能說明理由？",
+      "變化題答錯時，是讀題問題、概念問題、計算問題，還是粗心問題？"
+    ]
+  };
+}
+
+function uniqueByPrompt(items) {
+  const seen = new Set();
+  return items.filter((item) => {
+    if (!item || seen.has(item.prompt)) return false;
+    seen.add(item.prompt);
+    return true;
+  });
+}
+
+function normalizeExercise(question, no, level) {
+  return {
+    no,
+    level,
+    subject: subjectLabels[question.subject] || question.subject,
+    skill: question.skill,
+    prompt: question.prompt,
+    options: question.options || [],
+    answer: question.answer,
+    explanation: question.explanation || "請回到題目條件，確認答案能被題目支持。",
+    source: question.source || "系統生成類題"
+  };
+}
+
 function renderTeaching(teaching) {
   return `
     <div class="teaching-section">
@@ -1042,7 +1149,83 @@ function renderTeaching(teaching) {
       <ul>${teaching.assessment.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
       <ol>${teaching.nextLesson.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ol>
     </div>
+    <div class="teaching-section material-section">
+      <h3>十二、教師備課單</h3>
+      <div class="material-grid">
+        <div class="example-box">
+          <strong>本次診斷重點</strong>
+          <p>${escapeHtml(teaching.materialPack.teacherPrep.diagnosis)}</p>
+        </div>
+        <div class="example-box">
+          <strong>本堂主軸</strong>
+          <p>${escapeHtml(teaching.materialPack.teacherPrep.focus)}</p>
+          <p>${escapeHtml(teaching.materialPack.teacherPrep.objective)}</p>
+        </div>
+      </div>
+      <h4>準備教材</h4>
+      <ul>${teaching.materialPack.teacherPrep.materials.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
+      <h4>課程時間配置</h4>
+      <ol>${teaching.materialPack.teacherPrep.timing.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ol>
+    </div>
+    <div class="teaching-section material-section">
+      <h3>十三、學生講義</h3>
+      <h4>${escapeHtml(teaching.materialPack.studentHandout.title)}</h4>
+      <ul>${teaching.materialPack.studentHandout.beforeClass.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
+      <h4>解題四步驟</h4>
+      <ol>${teaching.materialPack.studentHandout.keyMethod.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ol>
+      <div class="worksheet-box">
+        <strong>示範題</strong>
+        <p>${escapeHtml(teaching.materialPack.studentHandout.workedExample.prompt)}</p>
+        ${teaching.materialPack.studentHandout.workedExample.studentBlanks.map((item) => `<p class="blank-line">${escapeHtml(item)}</p>`).join("")}
+      </div>
+      <div class="worksheet-box">
+        <strong>換你試試看</strong>
+        <p>${escapeHtml(teaching.materialPack.studentHandout.similarPrompt)}</p>
+        <p class="blank-line">我的關鍵線索：__________</p>
+        <p class="blank-line">我的答案與理由：__________</p>
+      </div>
+    </div>
+    <div class="teaching-section material-section">
+      <h3>十四、課堂練習題本</h3>
+      ${renderExerciseSet(teaching.materialPack.classExercises, true)}
+    </div>
+    <div class="teaching-section material-section">
+      <h3>十五、回家作業題本</h3>
+      ${renderExerciseSet(teaching.materialPack.homeworkExercises, true)}
+    </div>
+    <div class="teaching-section material-section">
+      <h3>十六、下課短測</h3>
+      ${renderExerciseSet(teaching.materialPack.exitTicket, true)}
+    </div>
+    <div class="teaching-section material-section">
+      <h3>十七、解答與解析</h3>
+      <ol class="answer-key">
+        ${teaching.materialPack.answerKey.map((item) => `
+          <li>
+            <strong>${escapeHtml(item.label)}：</strong>${escapeHtml(item.answer)}
+            <p>${escapeHtml(item.explanation)}</p>
+          </li>
+        `).join("")}
+      </ol>
+    </div>
+    <div class="teaching-section material-section">
+      <h3>十八、家長溝通摘要</h3>
+      <ul>${teaching.materialPack.parentSummary.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
+      <h4>老師課後觀察清單</h4>
+      <ul>${teaching.materialPack.teacherChecklist.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
+    </div>
   `;
+}
+
+function renderExerciseSet(exercises, includeBlank) {
+  return exercises.map((item) => `
+    <div class="exercise-card">
+      <span>${escapeHtml(item.level)}｜${escapeHtml(item.subject)}｜${escapeHtml(item.skill)}</span>
+      <strong>${item.no}. ${escapeHtml(item.prompt)}</strong>
+      ${item.options.length ? `<ol type="A">${item.options.map((option) => `<li>${escapeHtml(option)}</li>`).join("")}</ol>` : ""}
+      ${includeBlank ? `<p class="blank-line">關鍵線索：__________</p><p class="blank-line">答案與理由：__________</p>` : ""}
+    </div>
+  `).join("");
 }
 
 function initStudent() {

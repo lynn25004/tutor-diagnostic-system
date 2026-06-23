@@ -425,6 +425,54 @@ textarea {
   background: #ffffff;
 }
 
+.material-section {
+  background: #ffffff;
+}
+
+.material-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.worksheet-box,
+.exercise-card {
+  margin: 12px 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfdfb;
+}
+
+.exercise-card {
+  display: grid;
+  gap: 8px;
+}
+
+.exercise-card span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.exercise-card strong {
+  line-height: 1.65;
+}
+
+.exercise-card ol {
+  display: grid;
+  gap: 4px;
+}
+
+.blank-line {
+  min-height: 28px;
+  border-bottom: 1px solid #a8b8b0;
+}
+
+.answer-key li + li {
+  margin-top: 10px;
+}
+
 .student-layout {
   max-width: 980px;
 }
@@ -477,6 +525,43 @@ textarea {
 
 .hidden {
   display: none !important;
+}
+
+@media print {
+  body {
+    background: #ffffff;
+  }
+
+  .top-nav,
+  .hero,
+  #setupPanel,
+  #sourcePanel,
+  #reportPanel,
+  #importPanel,
+  #recordPanel,
+  #emptyTeaching,
+  #printTeachingBtn {
+    display: none !important;
+  }
+
+  .shell {
+    width: 100%;
+    margin: 0;
+  }
+
+  #teachingPanel {
+    border: 0;
+    box-shadow: none;
+    padding: 0;
+  }
+
+  .teaching-section,
+  .worksheet-box,
+  .exercise-card,
+  .example-box {
+    break-inside: avoid;
+    box-shadow: none;
+  }
 }
 
 @media (max-width: 900px) {
