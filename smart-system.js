@@ -252,6 +252,11 @@ function initTeacher() {
   els.grade.addEventListener("change", refreshFocus);
   refreshSelects();
 
+  document.querySelector("#logoutTeacherBtn")?.addEventListener("click", async () => {
+    await apiPost("/api/auth/logout", {});
+    location.href = "./teacher-login.html";
+  });
+
   document.querySelector("#buildTestBtn").addEventListener("click", () => {
     const config = {
       id: uid("test"),

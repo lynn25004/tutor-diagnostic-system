@@ -2,6 +2,7 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const zlib = require("zlib");
+const crypto = require("crypto");
 
 const root = __dirname;
 const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(root, "data");
@@ -14,6 +15,8 @@ const port = Number(process.env.PORT || 4173);
 const supabaseUrl = process.env.SUPABASE_URL || "";
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 const hasSupabase = Boolean(supabaseUrl && supabaseKey);
+const teacherAccessCode = process.env.TEACHER_ACCESS_CODE || "";
+const teacherCookieName = "td_teacher_session";
 
 const mime = {
   ".html": "text/html; charset=utf-8",
@@ -145,6 +148,59 @@ function send(res, status, body, type = "application/json; charset=utf-8") {
     "cache-control": "no-store"
   });
   res.end(typeof body === "string" || Buffer.isBuffer(body) ? body : JSON.stringify(body, null, 2));
+}
+
+function redirect(res, location) {
+  res.writeHead(302, {
+    location,
+    "cache-control": "no-store"
+  });
+  res.end();
+}
+
+function teacherSessionToken() {
+  return crypto
+    .createHash("sha256")
+    .update(`teacher:${teacherAccessCode}`)
+    .digest("hex");
+}
+
+function parseCookies(req) {
+  return Object.fromEntries(
+    String(req.headers.cookie || "")
+      .split(";")
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .map((item) => {
+        const index = item.indexOf("=");
+        return index === -1 ? [item, ""] : [item.slice(0, index), decodeURIComponent(item.slice(index + 1))];
+      })
+  );
+}
+
+function isTeacherAuthenticated(req) {
+  if (!teacherAccessCode) return true;
+  return parseCookies(req)[teacherCookieName] === teacherSessionToken();
+}
+
+function requireTeacher(req, res) {
+  if (isTeacherAuthenticated(req)) return true;
+  send(res, 401, { ok: false, error: "teacher_auth_required" });
+  return false;
+}
+
+function setTeacherCookie(res) {
+  res.setHeader(
+    "set-cookie",
+    `${teacherCookieName}=${encodeURIComponent(teacherSessionToken())}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000`
+  );
+}
+
+function clearTeacherCookie(res) {
+  res.setHeader(
+    "set-cookie",
+    `${teacherCookieName}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`
+  );
 }
 
 function serveStatic(req, res) {
@@ -455,27 +511,58 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${port}`);
 
   try {
+    if (req.method === "GET" && url.pathname === "/teacher.html" && !isTeacherAuthenticated(req)) {
+      redirect(res, "/teacher-login.html");
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/health") {
       send(res, 200, { ok: true, port, storage: hasSupabase ? "supabase" : "json", now: new Date().toISOString() });
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/api/auth/teacher") {
+      send(res, 200, { ok: true, authenticated: isTeacherAuthenticated(req), enabled: Boolean(teacherAccessCode) });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/auth/teacher") {
+      const body = await readBody(req);
+      if (!teacherAccessCode || body.code === teacherAccessCode) {
+        setTeacherCookie(res);
+        send(res, 200, { ok: true });
+      } else {
+        send(res, 401, { ok: false, error: "密碼不正確" });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/auth/logout") {
+      clearTeacherCookie(res);
+      send(res, 200, { ok: true });
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/sources") {
+      if (!requireTeacher(req, res)) return;
       send(res, 200, readJson(sourceFile, { updatedAt: null, sources: [] }));
       return;
     }
 
     if (req.method === "POST" && url.pathname === "/api/sources/sync") {
+      if (!requireTeacher(req, res)) return;
       send(res, 200, await syncSources());
       return;
     }
 
     if (req.method === "GET" && url.pathname === "/api/records") {
+      if (!requireTeacher(req, res)) return;
       send(res, 200, await getRecordsStore());
       return;
     }
 
     if (req.method === "POST" && url.pathname === "/api/records") {
+      if (!requireTeacher(req, res)) return;
       const body = await readBody(req);
       await setRecordsStore(body);
       send(res, 200, { ok: true, savedAt: new Date().toISOString() });
@@ -483,26 +570,31 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "GET" && url.pathname === "/api/import/candidates") {
+      if (!requireTeacher(req, res)) return;
       send(res, 200, importCandidates());
       return;
     }
 
     if (req.method === "GET" && url.pathname === "/api/import/pending") {
+      if (!requireTeacher(req, res)) return;
       send(res, 200, readJson(pendingImportFile, []));
       return;
     }
 
     if (req.method === "GET" && url.pathname === "/api/import/official-bank") {
+      if (!requireTeacher(req, res)) return;
       send(res, 200, await getOfficialBankStore());
       return;
     }
 
     if (req.method === "POST" && url.pathname === "/api/import/download") {
+      if (!requireTeacher(req, res)) return;
       send(res, 200, await importPdfCandidate(await readBody(req)));
       return;
     }
 
     if (req.method === "POST" && url.pathname === "/api/import/approve") {
+      if (!requireTeacher(req, res)) return;
       send(res, 200, await approveImport(await readBody(req)));
       return;
     }

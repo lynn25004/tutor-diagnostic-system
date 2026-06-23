@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>老師登入｜家教診斷系統</title>
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="./smart-system.css">
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Teacher Login</p>
+          <h1>老師工作台登入</h1>
+          <p>老師端包含學生檔案、診斷報告與教材內容，請先登入再使用。</p>
+        </div>
+        <div class="summary-grid">
+          <div>
+            <span>保護</span>
+            <strong>學生檔案</strong>
+          </div>
+          <div>
+            <span>分流</span>
+            <strong>學生只作答</strong>
+          </div>
+          <div>
+            <span>管理</span>
+            <strong>老師專用</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-title">
+          <div>
+            <p class="eyebrow">Access Code</p>
+            <h2>輸入老師密碼</h2>
+          </div>
+        </div>
+        <form id="teacherLoginForm" class="form-grid">
+          <label class="wide">
+            老師密碼
+            <input id="teacherAccessCode" type="password" autocomplete="current-password" placeholder="請輸入老師專用密碼">
+          </label>
+        </form>
+        <div id="loginMessage" class="notice hidden"></div>
+        <div class="button-row">
+          <button id="teacherLoginBtn" class="primary-btn" type="button">登入老師工作台</button>
+          <a class="ghost-btn" href="./student.html">回學生作答頁</a>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      const form = document.querySelector("#teacherLoginForm");
+      const button = document.querySelector("#teacherLoginBtn");
+      const input = document.querySelector("#teacherAccessCode");
+      const message = document.querySelector("#loginMessage");
+
+      async function loginTeacher() {
+        message.classList.add("hidden");
+        button.disabled = true;
+        try {
+          const response = await fetch("/api/auth/teacher", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ code: input.value })
+          });
+
+          if (response.ok) {
+            location.href = "./teacher.html";
+            return;
+          }
+
+          const payload = await response.json().catch(() => ({}));
+          message.textContent = payload.error || "登入失敗，請重新確認密碼。";
+          message.classList.remove("hidden");
+        } catch {
+          message.textContent = "目前無法連線到伺服器，請稍後再試。";
+          message.classList.remove("hidden");
+        } finally {
+          button.disabled = false;
+        }
+      }
+
+      button.addEventListener("click", loginTeacher);
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        loginTeacher();
+      });
+    </script>
+  </body>
+</html>

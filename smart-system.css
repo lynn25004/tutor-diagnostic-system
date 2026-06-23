@@ -78,6 +78,8 @@ a {
 }
 
 .nav-links a,
+.nav-button,
+.nav-links span,
 .small-pill {
   display: inline-flex;
   align-items: center;
@@ -91,7 +93,14 @@ a {
   font-weight: 800;
 }
 
-.nav-links a.active {
+.nav-button {
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+}
+
+.nav-links a.active,
+.nav-links span.active {
   border-color: var(--green-dark);
   color: #ffffff;
   background: var(--green);
