@@ -11,6 +11,9 @@ const recordsFile = path.join(dataDir, "records.json");
 const pendingImportFile = path.join(dataDir, "pending-imports.json");
 const officialBankFile = path.join(dataDir, "official-question-bank.json");
 const port = Number(process.env.PORT || 4173);
+const supabaseUrl = process.env.SUPABASE_URL || "";
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+const hasSupabase = Boolean(supabaseUrl && supabaseKey);
 
 const mime = {
   ".html": "text/html; charset=utf-8",
@@ -45,6 +48,95 @@ function writeJson(file, value) {
   const tempFile = `${file}.tmp`;
   fs.writeFileSync(tempFile, JSON.stringify(value, null, 2), "utf8");
   fs.renameSync(tempFile, file);
+}
+
+async function supabaseRequest(table, options = {}) {
+  if (!hasSupabase) return null;
+  const {
+    method = "GET",
+    query = "",
+    body = undefined,
+    prefer = ""
+  } = options;
+  const response = await fetch(`${supabaseUrl.replace(/\/$/, "")}/rest/v1/${table}${query}`, {
+    method,
+    headers: {
+      apikey: supabaseKey,
+      authorization: `Bearer ${supabaseKey}`,
+      "content-type": "application/json",
+      ...(prefer ? { prefer } : {})
+    },
+    body: body === undefined ? undefined : JSON.stringify(body)
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Supabase ${table} ${method} 失敗：${response.status} ${text}`);
+  }
+
+  if (response.status === 204) return null;
+  const text = await response.text();
+  return text ? JSON.parse(text) : null;
+}
+
+async function getRecordsStore() {
+  if (!hasSupabase) return readJson(recordsFile, []);
+  const rows = await supabaseRequest("student_records", {
+    query: "?select=payload&order=updated_at.desc"
+  });
+  return rows.map((row) => row.payload);
+}
+
+async function setRecordsStore(records) {
+  if (!hasSupabase) {
+    writeJson(recordsFile, records);
+    return;
+  }
+  await supabaseRequest("student_records", { method: "DELETE", query: "?id=not.is.null" });
+  if (records.length) {
+    await supabaseRequest("student_records", {
+      method: "POST",
+      body: records.map((record) => ({
+        id: record.id,
+        student_name: record.studentName,
+        grade_label: record.gradeLabel,
+        payload: record,
+        updated_at: new Date().toISOString()
+      })),
+      prefer: "return=minimal"
+    });
+  }
+}
+
+async function getOfficialBankStore() {
+  if (!hasSupabase) return readJson(officialBankFile, []);
+  const rows = await supabaseRequest("official_question_bank", {
+    query: "?select=payload&order=approved_at.desc"
+  });
+  return rows.map((row) => row.payload);
+}
+
+async function setOfficialBankStore(items) {
+  if (!hasSupabase) {
+    writeJson(officialBankFile, items);
+    return;
+  }
+  await supabaseRequest("official_question_bank", { method: "DELETE", query: "?id=not.is.null" });
+  if (items.length) {
+    await supabaseRequest("official_question_bank", {
+      method: "POST",
+      body: items.map((item) => ({
+        id: item.id,
+        year: item.year,
+        subject: item.subject,
+        title: item.title,
+        source_url: item.url,
+        payload: item,
+        approved_at: item.approvedAt || new Date().toISOString()
+      })),
+      prefer: "return=minimal"
+    });
+  }
 }
 
 function send(res, status, body, type = "application/json; charset=utf-8") {
@@ -262,9 +354,9 @@ function downloadUrl(url) {
   return url;
 }
 
-function approveImport(body) {
+async function approveImport(body) {
   const pending = readJson(pendingImportFile, []);
-  const official = readJson(officialBankFile, []);
+  const official = await getOfficialBankStore();
   const item = pending.find((entry) => entry.id === body.id);
   if (!item) throw new Error("找不到待審核項目");
 
@@ -274,7 +366,7 @@ function approveImport(body) {
     approvedAt: new Date().toISOString(),
     usageNote: body.usageNote || "官方題目全文作為題庫核心，已保留來源、年份、科目與網址。"
   };
-  writeJson(officialBankFile, [approved, ...official.filter((entry) => entry.id !== body.id)]);
+  await setOfficialBankStore([approved, ...official.filter((entry) => entry.id !== body.id)]);
   writeJson(pendingImportFile, pending.map((entry) => entry.id === body.id ? approved : entry));
   return approved;
 }
@@ -364,7 +456,7 @@ const server = http.createServer(async (req, res) => {
 
   try {
     if (req.method === "GET" && url.pathname === "/api/health") {
-      send(res, 200, { ok: true, port, now: new Date().toISOString() });
+      send(res, 200, { ok: true, port, storage: hasSupabase ? "supabase" : "json", now: new Date().toISOString() });
       return;
     }
 
@@ -379,13 +471,13 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "GET" && url.pathname === "/api/records") {
-      send(res, 200, readJson(recordsFile, []));
+      send(res, 200, await getRecordsStore());
       return;
     }
 
     if (req.method === "POST" && url.pathname === "/api/records") {
       const body = await readBody(req);
-      writeJson(recordsFile, body);
+      await setRecordsStore(body);
       send(res, 200, { ok: true, savedAt: new Date().toISOString() });
       return;
     }
@@ -401,7 +493,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "GET" && url.pathname === "/api/import/official-bank") {
-      send(res, 200, readJson(officialBankFile, []));
+      send(res, 200, await getOfficialBankStore());
       return;
     }
 
@@ -411,7 +503,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && url.pathname === "/api/import/approve") {
-      send(res, 200, approveImport(await readBody(req)));
+      send(res, 200, await approveImport(await readBody(req)));
       return;
     }
 

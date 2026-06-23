@@ -1,93 +1,97 @@
-# 家教診斷系統正式部署
+# 家教診斷系統免費正式部署
 
-## 正式網址
+## 架構
+
+免費部署採用：
+
+- Render Free Web Service：跑 Node.js 後端與前端頁面
+- Supabase Free Database：保存學生檔案與正式官方題庫
+- 本機 JSON：只作為沒有 Supabase 時的備援
+
+> 注意：Render 免費方案沒有永久磁碟，因此不要依賴伺服器本機檔案保存重要資料。
+
+## 一、建立 Supabase 專案
+
+1. 到 Supabase 建立新專案。
+2. 進入 SQL Editor。
+3. 貼上 `supabase-schema.sql`。
+4. 執行 SQL 建立資料表。
+
+需要的資料表：
+
+- `student_records`
+- `official_question_bank`
+
+## 二、取得 Supabase 環境變數
+
+到 Supabase 專案設定取得：
+
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+
+請不要把 `SERVICE_ROLE_KEY` 放到前端，也不要公開。
+
+## 三、部署到 Render 免費方案
+
+1. 到 Render 建立 Blueprint。
+2. 選 GitHub repo：
+   `lynn25004/tutor-diagnostic-system`
+3. Render 會讀取 `render.yaml`。
+4. 確認方案是 Free。
+5. 在 Render Environment Variables 填入：
+   - `SUPABASE_URL`
+   - `SUPABASE_SERVICE_ROLE_KEY`
+6. 部署。
+
+## 四、正式網址
 
 部署完成後會得到類似：
 
-`https://你的服務名稱.onrender.com`
+`https://tutor-diagnostic-system.onrender.com`
 
 老師端：
 
-`https://你的服務名稱.onrender.com/teacher.html`
+`https://tutor-diagnostic-system.onrender.com/teacher.html`
 
 學生端：
 
-`https://你的服務名稱.onrender.com/student.html`
+`https://tutor-diagnostic-system.onrender.com/student.html`
 
-## 建議平台
+健康檢查：
 
-第一版正式部署建議使用 Render Web Service，原因：
+`https://tutor-diagnostic-system.onrender.com/api/health`
 
-- 可直接跑 Node.js 後端
-- 可掛永久磁碟儲存學生檔案、官方來源快取、PDF 題庫
-- 支援健康檢查 `/api/health`
-- 不需要先拆前後端
+如果 Supabase 設定成功，健康檢查會顯示：
 
-## 部署步驟
-
-1. 將 `outputs` 資料夾作為部署專案根目錄。
-2. 上傳到 GitHub repository。
-3. 到 Render 建立 `Blueprint` 或 `Web Service`。
-4. 若使用 Blueprint，選擇 `render.yaml`。
-5. 確認環境變數：
-   - `NODE_ENV=production`
-   - `DATA_DIR=/var/data`
-6. 確認已掛永久磁碟：
-   - mount path: `/var/data`
-   - size: 1GB 起跳
-7. 部署完成後打開 `/api/health` 檢查。
-
-## 本機正式模式測試
-
-在 `outputs` 目錄執行：
-
-```powershell
-npm start
+```json
+{
+  "ok": true,
+  "storage": "supabase"
+}
 ```
 
-或：
+## 五、目前儲存策略
 
-```powershell
-node server.js
-```
+會寫入 Supabase：
 
-開啟：
+- 學生檔案
+- 歷次診斷
+- 核准後的正式官方題庫
 
-`http://localhost:4173/teacher.html`
+仍在伺服器暫存：
 
-## 資料儲存位置
+- 官方來源快取
+- 待審核 PDF 暫存
+- PDF 檔案快取
 
-預設本機：
+免費版建議先保存「來源網址與核准紀錄」，不要大量保存 PDF 檔案本體。
 
-`outputs/data`
+## 六、後續升級
 
-正式部署：
+若未來開始正式營運，建議升級：
 
-`DATA_DIR` 指定的位置，例如 `/var/data`
-
-裡面會存：
-
-- `records.json`：學生檔案
-- `source-cache.json`：官方來源同步快取
-- `pending-imports.json`：待審核 PDF 題本
-- `official-question-bank.json`：正式官方題庫
-- `pdf-cache/`：下載的官方 PDF
-
-## 目前已完成
-
-- 老師端與學生端分離
-- 後端 API
-- 學生檔案儲存
-- 近十年官方來源同步
-- PDF 候選掃描
-- 官方 PDF 下載到待審核
-- 核准進正式題庫
-- 部署設定
-
-## 下一步建議
-
-- 接 GitHub 自動部署
-- 接登入權限
-- 接資料庫 PostgreSQL
-- 接進階 PDF/OCR 解析
-- 加入人工審題工作流
+- Supabase Storage：保存 PDF 檔案
+- PostgreSQL 題目結構化表
+- 老師登入系統
+- 題庫審核流程
+- 進階 PDF/OCR 解析
