@@ -144,7 +144,7 @@ function send(res, status, body, type = "application/json; charset=utf-8") {
     "content-type": type,
     "cache-control": "no-store"
   });
-  res.end(typeof body === "string" ? body : JSON.stringify(body, null, 2));
+  res.end(typeof body === "string" || Buffer.isBuffer(body) ? body : JSON.stringify(body, null, 2));
 }
 
 function serveStatic(req, res) {
