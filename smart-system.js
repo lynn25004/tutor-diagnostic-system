@@ -298,6 +298,8 @@ function pickQuestions(config) {
   order.forEach((subject) => {
     const pool = rankedPool(config, subject).filter((question) => !picked.some((item) => item.id === question.id));
     if (pool[0]) picked.push(pool[0]);
+    const generated = makeGeneratedQuestion(config, subject, picked.length + 1);
+    if (picked.length < config.count && !picked.some((item) => item.prompt === generated.prompt)) picked.push(generated);
   });
 
   const fullPool = (config.subject === "all" ? order : [config.subject])
@@ -311,7 +313,7 @@ function pickQuestions(config) {
   let generateIndex = 1;
   while (picked.length < config.count) {
     const subject = order[(picked.length + generateIndex - 1) % order.length];
-    const generated = makeGeneratedQuestion(config, subject, generateIndex);
+    const generated = ensureUniqueQuestion(makeGeneratedQuestion(config, subject, generateIndex), picked, generateIndex);
     picked.push(generated);
     generateIndex += 1;
   }
@@ -349,19 +351,22 @@ function makeGeneratedQuestion(config, subject, index) {
         ? "進階趨勢：舉一反三與解釋理由"
         : "校內趨勢：概念熟練與題型遷移";
 
-  const template = generatedTemplates[subject] || generatedTemplates.general;
+  const templateSet = generatedTemplates[subject] || generatedTemplates.general;
+  const templates = Array.isArray(templateSet) ? templateSet : [templateSet];
+  const variantSeed = Math.abs(hashText(`${config.id}-${config.grade}-${subject}-${config.goal}-${index}`));
+  const template = templates[variantSeed % templates.length];
   const level = config.goal === "advanced" || config.goal === "exam" ? "整合應用" : "核心概念";
-  const built = template(config, index);
+  const built = template(config, index, variantSeed);
 
   return {
-    id: `generated-${config.grade}-${subject}-${config.goal}-${index}`,
+    id: `generated-${config.grade}-${subject}-${config.goal}-${index}-${variantSeed}`,
     stage: config.stage,
     grades: [config.grade],
     subject,
     goals: [config.goal],
     skill: built.skill || `${subjectText}${level}`,
     prompt: built.prompt,
-    options: built.options,
+    options: rotateOptions(built.options, variantSeed),
     answer: built.answer,
     trend,
     source,
@@ -369,95 +374,250 @@ function makeGeneratedQuestion(config, subject, index) {
   };
 }
 
+function ensureUniqueQuestion(question, picked, index) {
+  if (!picked.some((item) => item.prompt === question.prompt)) return question;
+  return {
+    ...question,
+    id: `${question.id}-variant-${index}`,
+    skill: `${question.skill}變化題`,
+    prompt: `${question.prompt}（變化題 ${index}：請先找關鍵線索，再判斷答案。）`,
+    explanation: `${question.explanation} 本題為同概念變化題，重點是確認學生能否遷移方法，而不是只記住原題。`
+  };
+}
+
+function hashText(value) {
+  return String(value).split("").reduce((total, char) => ((total << 5) - total + char.charCodeAt(0)) | 0, 0);
+}
+
+function rotateOptions(options, seed) {
+  const safe = [...options];
+  const shift = Math.abs(seed) % safe.length;
+  return [...safe.slice(shift), ...safe.slice(0, shift)];
+}
+
 const generatedTemplates = {
-  math: (config, index) => {
-    const base = config.grade.startsWith("j") ? 12 + index * 3 : 8 + index * 2;
-    const rate = config.goal === "advanced" ? 3 : 2;
-    return {
-      skill: config.goal === "foundation" ? "計算與讀題" : "數量關係應用",
-      prompt: `某次練習中，學生每天完成 ${base} 題，連續 ${rate + 2} 天後又多完成 ${rate} 題，共完成幾題？`,
-      options: [`${base * (rate + 2)}`, `${base * (rate + 2) + rate}`, `${base + rate + 2}`, `${base * rate}`],
-      answer: `${base * (rate + 2) + rate}`,
-      explanation: `先算每天 ${base} 題連續 ${rate + 2} 天，再加上多完成的 ${rate} 題。`
-    };
-  },
-  chinese: (config) => ({
-    skill: config.goal === "foundation" ? "文意理解" : "觀點推論",
-    prompt: "一篇文章提到：學習不是只追求速度，而是要知道自己錯在哪裡，並調整方法。作者最可能想表達什麼？",
-    options: ["學習需要反思與調整", "速度永遠最重要", "錯誤不需要處理", "只要背答案即可"],
-    answer: "學習需要反思與調整",
-    explanation: "文章強調知道錯在哪裡並調整方法，因此主旨是反思與調整。"
-  }),
-  english: (config) => ({
-    skill: config.goal === "foundation" ? "句意理解" : "閱讀推論",
-    prompt: "Amy practiced English for ten minutes every day. After one month, she could read short stories faster. What helped Amy improve?",
-    options: ["Practicing every day.", "Buying a new bag.", "Skipping class.", "Sleeping late."],
-    answer: "Practicing every day.",
-    explanation: "短文指出每天練習後閱讀變快，因此原因是持續練習。"
-  }),
-  social: () => ({
-    skill: "生活公民與社會觀察",
-    prompt: "班級討論公共空間使用規則時，最適合先考量哪一點？",
-    options: ["多數人共同使用的公平與安全", "只讓最快的人使用", "完全不需要規則", "只看誰聲音最大"],
-    answer: "多數人共同使用的公平與安全",
-    explanation: "公共空間規則應兼顧公平、安全與共同使用。"
-  }),
-  science: () => ({
-    skill: "生活科學推論",
-    prompt: "把濕衣服攤開比揉成一團更快乾，主要和哪個因素有關？",
-    options: ["接觸空氣的面積較大", "衣服變重", "水變成固體", "顏色變深"],
-    answer: "接觸空氣的面積較大",
-    explanation: "攤開可增加蒸發面積，水分較容易散失。"
-  }),
-  social_geography: () => ({
-    skill: "地理資料判讀",
-    prompt: "若某城市捷運站周邊商店變多、人口流動增加，最合理的原因是什麼？",
-    options: ["交通可及性提高", "緯度突然改變", "酸鹼值下降", "細胞數增加"],
-    answer: "交通可及性提高",
-    explanation: "交通便利會帶動人流與商業活動。"
-  }),
-  social_history: () => ({
-    skill: "歷史因果推論",
-    prompt: "若某政策推動後，商業活動增加、城市人口上升，分析時最應注意什麼？",
-    options: ["政策與社會變遷的因果關係", "單字複數變化", "化學式配平", "電路是否通路"],
-    answer: "政策與社會變遷的因果關係",
-    explanation: "歷史題常要求判斷事件原因、經過與影響。"
-  }),
-  social_civics: () => ({
-    skill: "公民素養判斷",
-    prompt: "看到網路訊息宣稱某政策一定會成功，但沒有提供資料來源，最適合怎麼做？",
-    options: ["查證來源與不同觀點", "立刻轉傳", "只看標題判斷", "完全不需要思考"],
-    answer: "查證來源與不同觀點",
-    explanation: "公民素養重視資訊查證與理性判斷。"
-  }),
-  science_biology: () => ({
-    skill: "生物系統理解",
-    prompt: "運動後呼吸變快，主要是身體需要更多什麼來幫助細胞活動？",
-    options: ["氧氣", "沙子", "磁鐵", "鹽巴"],
-    answer: "氧氣",
-    explanation: "運動時細胞活動增加，需要更多氧氣。"
-  }),
-  science_physics: () => ({
-    skill: "物理情境推論",
-    prompt: "同一台車在相同時間內行駛距離變長，代表它的速度如何？",
-    options: ["變快", "變慢", "一定停止", "無法測量時間"],
-    answer: "變快",
-    explanation: "相同時間內距離越長，速度越快。"
-  }),
-  science_chemistry: () => ({
-    skill: "化學生活應用",
-    prompt: "泡騰錠放入水中產生氣泡，最適合用哪個概念觀察？",
-    options: ["化學反應產生氣體", "地圖比例尺", "文言代詞", "民主投票"],
-    answer: "化學反應產生氣體",
-    explanation: "產生氣泡表示可能有氣體生成，可用化學反應概念觀察。"
-  }),
-  general: () => ({
-    skill: "綜合判讀",
-    prompt: "面對一段新資料時，最有效的第一步是什麼？",
-    options: ["找出題目要問什麼", "直接猜答案", "忽略所有數字", "只看最後一個字"],
-    answer: "找出題目要問什麼",
-    explanation: "先確認問題目標，才能選擇合適方法。"
-  })
+  math: [
+    (config, index, seed) => {
+      const base = config.grade.startsWith("j") ? 12 + (seed % 9) + index * 2 : 8 + (seed % 6) + index;
+      const days = config.goal === "advanced" ? 6 : 4 + (seed % 3);
+      const extra = 2 + (seed % 5);
+      return {
+        skill: config.goal === "foundation" ? "計算與讀題" : "數量關係應用",
+        prompt: `某次練習中，學生每天完成 ${base} 題，連續 ${days} 天後又多完成 ${extra} 題，共完成幾題？`,
+        options: [`${base * days}`, `${base * days + extra}`, `${base + days + extra}`, `${base * extra}`],
+        answer: `${base * days + extra}`,
+        explanation: `先算每天 ${base} 題連續 ${days} 天：${base} × ${days} = ${base * days}，再加上 ${extra} 題。`
+      };
+    },
+    (config, index, seed) => {
+      const price = 25 + (seed % 8) * 5;
+      const count = 3 + (index % 4);
+      const discount = 10 + (seed % 3) * 5;
+      const total = price * count - discount;
+      return {
+        skill: "生活應用與多步驟計算",
+        prompt: `一本筆記本 ${price} 元，買 ${count} 本後折價 ${discount} 元，實際要付多少元？`,
+        options: [`${price * count}`, `${total}`, `${total + discount}`, `${price + count - discount}`],
+        answer: `${total}`,
+        explanation: `先算原價 ${price} × ${count} = ${price * count}，再扣掉折價 ${discount} 元。`
+      };
+    },
+    (config, index, seed) => {
+      const a = 2 + (seed % 5);
+      const b = 8 + index + (seed % 4);
+      const x = a + b;
+      return {
+        skill: config.stage === "junior" ? "代數關係" : "未知數推理",
+        prompt: `某數減去 ${a} 後是 ${b}，這個數是多少？`,
+        options: [`${b - a}`, `${x}`, `${a * b}`, `${x + a}`],
+        answer: `${x}`,
+        explanation: `題目說某數 - ${a} = ${b}，所以某數 = ${b} + ${a} = ${x}。`
+      };
+    }
+  ],
+  chinese: [
+    () => ({
+      skill: "文意理解",
+      prompt: "一篇文章提到：學習不是只追求速度，而是要知道自己錯在哪裡，並調整方法。作者最可能想表達什麼？",
+      options: ["學習需要反思與調整", "速度永遠最重要", "錯誤不需要處理", "只要背答案即可"],
+      answer: "學習需要反思與調整",
+      explanation: "文章強調知道錯在哪裡並調整方法，因此主旨是反思與調整。"
+    }),
+    () => ({
+      skill: "語句銜接",
+      prompt: "「他先整理資料，再把重點寫成表格，最後上台說明。」這句話最適合用來描述哪一種能力？",
+      options: ["組織與表達", "單純記憶", "逃避討論", "猜測答案"],
+      answer: "組織與表達",
+      explanation: "整理、表格與說明都指向組織資料並表達。"
+    }),
+    () => ({
+      skill: "觀點推論",
+      prompt: "作者說：「真正的練習，不是把錯題擦掉，而是留下錯因。」這句話最可能提醒讀者什麼？",
+      options: ["要分析錯誤原因", "不要再寫題目", "錯題沒有價值", "只看分數即可"],
+      answer: "要分析錯誤原因",
+      explanation: "留下錯因代表重視錯誤分析，才能改善學習。"
+    })
+  ],
+  english: [
+    () => ({
+      skill: "句意理解",
+      prompt: "Amy practiced English for ten minutes every day. After one month, she could read short stories faster. What helped Amy improve?",
+      options: ["Practicing every day.", "Buying a new bag.", "Skipping class.", "Sleeping late."],
+      answer: "Practicing every day.",
+      explanation: "短文指出每天練習後閱讀變快，因此原因是持續練習。"
+    }),
+    () => ({
+      skill: "文法選擇",
+      prompt: "Kevin usually ___ breakfast at seven, but he was late today.",
+      options: ["eat", "eats", "eating", "ate"],
+      answer: "eats",
+      explanation: "usually 表示習慣，主詞 Kevin 是第三人稱單數，所以用 eats。"
+    }),
+    () => ({
+      skill: "閱讀推論",
+      prompt: "Mia forgot her umbrella. When she got home, her shoes were wet. How was the weather most likely?",
+      options: ["Rainy.", "Sunny.", "Windless.", "Snowy in summer."],
+      answer: "Rainy.",
+      explanation: "忘記雨傘且鞋子濕了，最合理推論是下雨。"
+    })
+  ],
+  social: [
+    () => ({
+      skill: "生活公民與社會觀察",
+      prompt: "班級討論公共空間使用規則時，最適合先考量哪一點？",
+      options: ["多數人共同使用的公平與安全", "只讓最快的人使用", "完全不需要規則", "只看誰聲音最大"],
+      answer: "多數人共同使用的公平與安全",
+      explanation: "公共空間規則應兼顧公平、安全與共同使用。"
+    }),
+    () => ({
+      skill: "地圖與方位",
+      prompt: "看校園平面圖找保健室時，最需要先確認什麼？",
+      options: ["自己目前位置與方向", "同學喜歡的顏色", "午餐菜單", "鉛筆長度"],
+      answer: "自己目前位置與方向",
+      explanation: "地圖判讀要先確認目前位置，才能決定路線。"
+    })
+  ],
+  science: [
+    () => ({
+      skill: "生活科學推論",
+      prompt: "把濕衣服攤開比揉成一團更快乾，主要和哪個因素有關？",
+      options: ["接觸空氣的面積較大", "衣服變重", "水變成固體", "顏色變深"],
+      answer: "接觸空氣的面積較大",
+      explanation: "攤開可增加蒸發面積，水分較容易散失。"
+    }),
+    () => ({
+      skill: "實驗變因",
+      prompt: "比較兩杯水蒸發快慢時，若只想看溫度影響，其他條件應該如何？",
+      options: ["盡量保持相同", "全部改變", "只改杯子顏色", "不需要記錄"],
+      answer: "盡量保持相同",
+      explanation: "控制變因時，只改一個想研究的因素，其餘條件要一致。"
+    })
+  ],
+  social_geography: [
+    () => ({
+      skill: "地理資料判讀",
+      prompt: "若某城市捷運站周邊商店變多、人口流動增加，最合理的原因是什麼？",
+      options: ["交通可及性提高", "緯度突然改變", "酸鹼值下降", "細胞數增加"],
+      answer: "交通可及性提高",
+      explanation: "交通便利會帶動人流與商業活動。"
+    }),
+    () => ({
+      skill: "地形與人類活動",
+      prompt: "山區道路彎曲且聚落較分散，最可能和哪個因素有關？",
+      options: ["地形起伏較大", "人口一定最多", "海水鹽度較低", "法律條文較多"],
+      answer: "地形起伏較大",
+      explanation: "地形會影響交通建設與聚落分布。"
+    })
+  ],
+  social_history: [
+    () => ({
+      skill: "歷史因果推論",
+      prompt: "若某政策推動後，商業活動增加、城市人口上升，分析時最應注意什麼？",
+      options: ["政策與社會變遷的因果關係", "單字複數變化", "化學式配平", "電路是否通路"],
+      answer: "政策與社會變遷的因果關係",
+      explanation: "歷史題常要求判斷事件原因、經過與影響。"
+    }),
+    () => ({
+      skill: "史料可信度",
+      prompt: "研究某事件時，同時比較官方紀錄、私人日記與報紙報導，主要是為了什麼？",
+      options: ["交叉檢證資料", "讓答案更長", "避免閱讀", "只相信單一說法"],
+      answer: "交叉檢證資料",
+      explanation: "多種史料互相比較，可以降低單一資料偏誤。"
+    })
+  ],
+  social_civics: [
+    () => ({
+      skill: "公民素養判斷",
+      prompt: "看到網路訊息宣稱某政策一定會成功，但沒有提供資料來源，最適合怎麼做？",
+      options: ["查證來源與不同觀點", "立刻轉傳", "只看標題判斷", "完全不需要思考"],
+      answer: "查證來源與不同觀點",
+      explanation: "公民素養重視資訊查證與理性判斷。"
+    }),
+    () => ({
+      skill: "權利與責任",
+      prompt: "在公共討論中，每個人都能表達意見，同時也應該注意什麼？",
+      options: ["尊重他人並負責任表達", "只攻擊不同意見", "不必查證", "完全不能討論"],
+      answer: "尊重他人並負責任表達",
+      explanation: "民主討論同時包含表達自由與尊重責任。"
+    })
+  ],
+  science_biology: [
+    () => ({
+      skill: "生物系統理解",
+      prompt: "運動後呼吸變快，主要是身體需要更多什麼來幫助細胞活動？",
+      options: ["氧氣", "沙子", "磁鐵", "鹽巴"],
+      answer: "氧氣",
+      explanation: "運動時細胞活動增加，需要更多氧氣。"
+    }),
+    () => ({
+      skill: "生態關係",
+      prompt: "若某地昆蟲數量大幅減少，仰賴昆蟲授粉的植物可能會受到什麼影響？",
+      options: ["結果與繁殖可能減少", "一定變成礦物", "全部立刻消失", "與環境毫無關係"],
+      answer: "結果與繁殖可能減少",
+      explanation: "授粉昆蟲減少會影響部分植物繁殖。"
+    })
+  ],
+  science_physics: [
+    () => ({
+      skill: "物理情境推論",
+      prompt: "同一台車在相同時間內行駛距離變長，代表它的速度如何？",
+      options: ["變快", "變慢", "一定停止", "無法測量時間"],
+      answer: "變快",
+      explanation: "相同時間內距離越長，速度越快。"
+    }),
+    () => ({
+      skill: "力與運動",
+      prompt: "推動同一個箱子時，地面越粗糙越難推，主要和哪個概念有關？",
+      options: ["摩擦力", "蒸發", "光合作用", "經緯度"],
+      answer: "摩擦力",
+      explanation: "粗糙表面通常使摩擦力增加，因此較難推動。"
+    })
+  ],
+  science_chemistry: [
+    () => ({
+      skill: "化學生活應用",
+      prompt: "泡騰錠放入水中產生氣泡，最適合用哪個概念觀察？",
+      options: ["化學反應產生氣體", "地圖比例尺", "文言代詞", "民主投票"],
+      answer: "化學反應產生氣體",
+      explanation: "產生氣泡表示可能有氣體生成，可用化學反應概念觀察。"
+    }),
+    () => ({
+      skill: "酸鹼與生活",
+      prompt: "清潔水垢時常使用酸性清潔劑，主要是利用酸和哪類物質反應的特性？",
+      options: ["碳酸鹽類沉積物", "方位角", "文學修辭", "生物分類"],
+      answer: "碳酸鹽類沉積物",
+      explanation: "水垢常含碳酸鹽，酸可和其反應而幫助清除。"
+    })
+  ],
+  general: [
+    () => ({
+      skill: "綜合判讀",
+      prompt: "面對一段新資料時，最有效的第一步是什麼？",
+      options: ["找出題目要問什麼", "直接猜答案", "忽略所有數字", "只看最後一個字"],
+      answer: "找出題目要問什麼",
+      explanation: "先確認問題目標，才能選擇合適方法。"
+    })
+  ]
 };
 
 function renderTeacher() {
@@ -577,27 +737,52 @@ function buildTeaching(submission) {
   const wrongQuestions = submission.questions.filter((question) => submission.answers[question.id] !== question.answer);
   const baseQuestion = wrongQuestions[0] || submission.questions[0];
   const similar = makeSimilarExample(baseQuestion);
+  const lesson = lessonBlueprint(submission, main, baseQuestion);
+  const practiceSet = makePracticeSet(baseQuestion, main);
 
   return {
     title: `${submission.config.gradeLabel} ${submission.config.subjectLabel} 補強教材：${main.skill}`,
+    overview: [
+      `適用學生：${submission.config.studentName}，目前診斷正確率 ${submission.report.accuracy}%。`,
+      `本教材先處理「${main.skill}」，再逐步拉到 ${submission.config.goalLabel} 需要的應用層次。`,
+      `建議用一堂 60-90 分鐘課完成第一輪，隔週用 10 分鐘短測追蹤。`
+    ],
     target: [
       `能說出 ${main.skill} 的核心觀念與常見陷阱。`,
       `能從題目文字、圖表或情境中圈出有效線索。`,
-      `能完成一題標準題、一題變化題，並用自己的話說明理由。`
+      `能完成一題標準題、一題變化題，並用自己的話說明理由。`,
+      `能把本題方法遷移到另一個數字、文本或生活情境。`
+    ],
+    prerequisites: lesson.prerequisites,
+    concept: lesson.concept,
+    vocabulary: lesson.vocabulary,
+    commonMistakes: lesson.commonMistakes,
+    lessonFlow: [
+      { time: "0-5 分鐘", title: "暖身診斷", detail: `請學生口頭說明「${main.skill}」可能在考什麼，老師只記錄不糾正。` },
+      { time: "5-20 分鐘", title: "概念建立", detail: lesson.concept.join(" ") },
+      { time: "20-35 分鐘", title: "示範題精講", detail: "老師示範如何圈關鍵字、列條件、排除干擾選項，並要求學生複述解題路線。" },
+      { time: "35-55 分鐘", title: "類題練習", detail: "先做一題同型，再做一題變化題；學生必須寫出理由，不只選答案。" },
+      { time: "55-70 分鐘", title: "錯因整理", detail: "把錯誤分成讀題錯、概念錯、計算錯、推論錯，寫入學生檔案。" },
+      { time: "70-90 分鐘", title: "挑戰與收束", detail: "完成一題舉一反三題，最後由學生說出今天可帶走的一個方法。" }
     ],
     teacherScript: [
       `先不要急著講答案。請學生重讀題目，說出他看到的條件、關鍵字和想用的方法。`,
       `若學生停住，老師只提示「這題在問什麼？」與「哪個條件最有用？」避免直接告訴公式。`,
-      `學生答對後仍要追問理由，因為近年考題重視判讀與說明，不只是選到答案。`
+      `學生答對後仍要追問理由，因為近年考題重視判讀與說明，不只是選到答案。`,
+      `若學生答錯，先問「你是在哪一步開始不確定？」再回到概念，不要只重算一次。`,
+      `每完成一題，都請學生用一句話說明：這題的陷阱是什麼、下次怎麼避免。`
     ],
     demonstration: {
       title: `示範題：${baseQuestion.skill}`,
       prompt: baseQuestion.prompt,
       answer: baseQuestion.answer,
       explanation: baseQuestion.explanation,
-      source: `${baseQuestion.source}｜${baseQuestion.trend}`
+      source: `${baseQuestion.source}｜${baseQuestion.trend}`,
+      boardSteps: lesson.boardSteps
     },
     similar,
+    guidedPractice: practiceSet.guided,
+    independentPractice: practiceSet.independent,
     practice: [
       {
         level: "A 基礎確認",
@@ -622,9 +807,28 @@ function buildTeaching(submission) {
       }
     ],
     homework: [
-      `回家練習 10 題：6 題基礎、3 題應用、1 題挑戰。`,
-      `每題都要畫出或標出關鍵線索，不只寫答案。`,
-      `下次課前用 5 分鐘小測，若達 80% 再進入下一個弱點。`
+      {
+        title: "第 1 部分：基礎熟練",
+        items: [`完成 6 題同型題，每題都要標出題目問法。`, `錯題訂正要寫「我錯在讀題、概念、計算或推論哪一類」。`]
+      },
+      {
+        title: "第 2 部分：應用遷移",
+        items: [`完成 3 題換情境題，題目數字、人物或文本不同，但核心方法相同。`, `每題寫一句理由：為什麼可以用今天的方法。`]
+      },
+      {
+        title: "第 3 部分：挑戰反思",
+        items: [`自己出 1 題類似題，附上答案與解析。`, `下次上課前用 5 分鐘小測，若達 80% 再進入下一個弱點。`]
+      }
+    ],
+    assessment: [
+      "能獨立圈出關鍵條件，給 1 分。",
+      "能選出正確方法或概念，給 1 分。",
+      "能完整說明理由或步驟，給 1 分。",
+      "能完成變化題或自出類題，給 1 分。滿分 4 分，3 分以上表示可進入下一單元。"
+    ],
+    nextLesson: [
+      priorities[1] ? `下一個弱點可接續處理「${priorities[1].label}｜${priorities[1].skill}」。` : "若本次達標，下一堂可提高題目整合度與限時要求。",
+      "保留本次錯題，兩週後回測一題同型與一題變化題，確認是否真正穩定。"
     ]
   };
 }
@@ -655,32 +859,146 @@ function makeSimilarExample(question) {
   return templates[question.subject] || fallback;
 }
 
+function lessonBlueprint(submission, main, baseQuestion) {
+  const subject = baseQuestion.subject;
+  const subjectName = subjectLabels[subject] || submission.config.subjectLabel;
+  const defaults = {
+    prerequisites: [
+      `學生需先能說出 ${subjectName} 題目正在問什麼。`,
+      "學生需能把題目資訊分成已知、未知與干擾資訊。",
+      "學生需能用一句話描述自己的解題方法。"
+    ],
+    concept: [
+      `${main.skill} 的核心不是背答案，而是辨認題目條件與概念之間的關係。`,
+      "先讀問題，再回頭找線索；不要一看到熟悉字眼就套公式或選選項。",
+      "遇到情境題時，要把生活文字轉成可操作的學科語言。"
+    ],
+    vocabulary: ["關鍵條件", "干擾資訊", "理由說明", "概念遷移"],
+    commonMistakes: [
+      "只看題目最後一句，忽略前面條件。",
+      "看到熟悉詞就直接套舊方法，沒有確認題目真正要求。",
+      "答案選對但說不出理由，代表概念仍不穩。"
+    ],
+    boardSteps: [
+      "第一行寫題目問什麼。",
+      "第二行列出可用條件。",
+      "第三行寫解題方法或判斷理由。",
+      "最後檢查答案是否符合題意。"
+    ]
+  };
+
+  const bySubject = {
+    math: {
+      prerequisites: ["四則運算順序", "能把文字題轉成算式", "能估算答案是否合理"],
+      concept: ["數學應用題要先找單位與關係。", "遇到多步驟題，先拆成小問題，再合併答案。", "計算後要用題目情境檢查單位。"],
+      vocabulary: ["已知量", "未知量", "單位", "關係式", "估算"],
+      commonMistakes: ["把所有數字直接相加。", "忘記先乘除後加減。", "答案沒有單位或單位不合理。"],
+      boardSteps: ["圈數字與單位。", "寫出題目要求的未知量。", "列式並分步計算。", "用估算檢查答案。"]
+    },
+    chinese: {
+      prerequisites: ["能找出句子主詞與動作", "能分辨事實與作者看法", "能用自己的話重述段落"],
+      concept: ["閱讀題先看題幹，再回文章找證據。", "主旨題找反覆出現的概念，推論題找前後因果。", "答案必須被文本支持，不能只靠自己的想法。"],
+      vocabulary: ["主旨", "觀點", "證據", "推論", "語氣"],
+      commonMistakes: ["用自己的經驗取代文章證據。", "只抓單一句，不看上下文。", "把例子誤認為主旨。"],
+      boardSteps: ["標出題幹關鍵字。", "回文本找相同或相近意思。", "刪除太絕對或無根據選項。", "用一句話說明答案證據。"]
+    },
+    english: {
+      prerequisites: ["能辨認基本時態線索", "能找主詞與動詞", "能讀懂短文中的原因與結果"],
+      concept: ["英文題先抓時間線索與主詞，再決定動詞形式。", "閱讀推論題要從句子證據推出答案。", "不熟的單字先用前後文猜，不要立刻放棄。"],
+      vocabulary: ["time clue", "subject", "verb", "reason", "result"],
+      commonMistakes: ["看到中文意思就忽略文法形式。", "沒有注意第三人稱單數或過去時間。", "閱讀題只看單字，不看句子關係。"],
+      boardSteps: ["圈時間副詞或關鍵句。", "找主詞與動詞。", "判斷文法或語意關係。", "回到題目確認答案。"]
+    }
+  };
+
+  const socialSubjects = ["social", "social_geography", "social_history", "social_civics"];
+  const scienceSubjects = ["science", "science_biology", "science_physics", "science_chemistry"];
+  if (socialSubjects.includes(subject)) {
+    return {
+      prerequisites: ["能讀懂資料中的時間、地點、人物或制度。", "能分辨原因、經過與影響。", "能用資料支持判斷。"],
+      concept: ["社會題重點是資料判讀，不是只背名詞。", "地理看空間關係，歷史看時間因果，公民看權利責任與公共判斷。", "遇到圖表或情境，先找變化方向與關鍵條件。"],
+      vocabulary: ["資料證據", "因果關係", "空間分布", "權利義務", "公共利益"],
+      commonMistakes: ["只背名詞，遇到情境就不會判斷。", "把時間先後誤認為必然因果。", "沒有用題目資料支持答案。"],
+      boardSteps: ["標出資料類型。", "找時間、地點、對象與變化。", "判斷原因與結果。", "用資料句回答。"]
+    };
+  }
+
+  if (scienceSubjects.includes(subject)) {
+    return {
+      prerequisites: ["能分辨觀察、假設與結論。", "能找出實驗中的操縱變因與控制變因。", "能用概念解釋生活現象。"],
+      concept: ["自然題重視用科學概念解釋現象。", "實驗題先看變因，圖表題先看趨勢。", "答案要能回到證據，不只背定義。"],
+      vocabulary: ["觀察", "假設", "變因", "證據", "趨勢"],
+      commonMistakes: ["把相關誤認為因果。", "沒有控制變因就下結論。", "只背名詞，不會套到生活情境。"],
+      boardSteps: ["找出現象或實驗目的。", "標示變因與資料趨勢。", "連回科學概念。", "用因果句寫結論。"]
+    };
+  }
+
+  return bySubject[subject] || defaults;
+}
+
+function makePracticeSet(baseQuestion, main) {
+  const similar = makeSimilarExample(baseQuestion);
+  return {
+    guided: [
+      {
+        prompt: baseQuestion.prompt,
+        hint: "先圈出題目問法，再圈出最有用的條件。",
+        answer: baseQuestion.answer,
+        explanation: baseQuestion.explanation
+      },
+      {
+        prompt: similar.prompt,
+        hint: "這題和示範題方法相同，但情境已改變，請先說出相同點。",
+        answer: similar.answer,
+        explanation: similar.steps.join(" ")
+      }
+    ],
+    independent: [
+      `請學生完成一題同型題，限時 2 分鐘，完成後口頭說明理由。`,
+      `請學生完成一題含干擾資訊的題目，要求先刪除無關條件。`,
+      `請學生把題目改寫成另一個生活情境，並保留同一個考點：${main.skill}。`
+    ]
+  };
+}
+
 function renderTeaching(teaching) {
   return `
     <div class="teaching-section">
       <h3>${escapeHtml(teaching.title)}</h3>
-      <p>這份內容可直接作為下一堂課教材骨架，老師可依學生反應增減題量。</p>
+      <p>這份內容可直接作為下一堂課教材使用，包含課前判斷、課堂講解、示範題、練習、作業與評量標準。</p>
+      <ul>${teaching.overview.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
     </div>
     <div class="teaching-section">
       <h3>一、教學目標</h3>
       <ol>${teaching.target.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ol>
     </div>
     <div class="teaching-section">
-      <h3>二、老師教學話術</h3>
+      <h3>二、課前必備能力</h3>
+      <ul>${teaching.prerequisites.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
+    </div>
+    <div class="teaching-section">
+      <h3>三、概念講解</h3>
+      <ol>${teaching.concept.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ol>
+      <p><strong>關鍵詞：</strong>${teaching.vocabulary.map(escapeHtml).join("、")}</p>
+    </div>
+    <div class="teaching-section">
+      <h3>四、老師教學話術</h3>
       <ol>${teaching.teacherScript.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ol>
     </div>
     <div class="teaching-section">
-      <h3>三、示範題與詳解</h3>
+      <h3>五、示範題與詳解</h3>
       <div class="example-box">
         <strong>${escapeHtml(teaching.demonstration.title)}</strong>
         <p>${escapeHtml(teaching.demonstration.prompt)}</p>
         <p><strong>答案：</strong>${escapeHtml(teaching.demonstration.answer)}</p>
         <p><strong>詳解：</strong>${escapeHtml(teaching.demonstration.explanation)}</p>
+        <p><strong>板書步驟：</strong></p>
+        <ol>${teaching.demonstration.boardSteps.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ol>
         <p><strong>來源標籤：</strong>${escapeHtml(teaching.demonstration.source)}</p>
       </div>
     </div>
     <div class="teaching-section">
-      <h3>四、類題與舉一反三</h3>
+      <h3>六、類題與舉一反三</h3>
       <div class="example-box">
         <p>${escapeHtml(teaching.similar.prompt)}</p>
         <p><strong>答案：</strong>${escapeHtml(teaching.similar.answer)}</p>
@@ -688,15 +1006,41 @@ function renderTeaching(teaching) {
       </div>
     </div>
     <div class="teaching-section">
-      <h3>五、課堂練習配置</h3>
+      <h3>七、引導練習</h3>
+      ${teaching.guidedPractice.map((item, index) => `
+        <div class="example-box">
+          <strong>引導題 ${index + 1}</strong>
+          <p>${escapeHtml(item.prompt)}</p>
+          <p><strong>提示：</strong>${escapeHtml(item.hint)}</p>
+          <p><strong>答案：</strong>${escapeHtml(item.answer)}</p>
+          <p><strong>解析：</strong>${escapeHtml(item.explanation)}</p>
+        </div>
+      `).join("")}
+    </div>
+    <div class="teaching-section">
+      <h3>八、課堂練習配置</h3>
       ${teaching.practice.map((group) => `
         <h4>${escapeHtml(group.level)}</h4>
         <ul>${group.items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
       `).join("")}
+      <h4>獨立練習</h4>
+      <ul>${teaching.independentPractice.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
     </div>
     <div class="teaching-section">
-      <h3>六、回家練習</h3>
-      <ol>${teaching.homework.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ol>
+      <h3>九、常見錯誤與補救</h3>
+      <ul>${teaching.commonMistakes.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
+    </div>
+    <div class="teaching-section">
+      <h3>十、回家練習</h3>
+      ${teaching.homework.map((group) => `
+        <h4>${escapeHtml(group.title)}</h4>
+        <ol>${group.items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ol>
+      `).join("")}
+    </div>
+    <div class="teaching-section">
+      <h3>十一、評量標準與下次追蹤</h3>
+      <ul>${teaching.assessment.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
+      <ol>${teaching.nextLesson.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ol>
     </div>
   `;
 }

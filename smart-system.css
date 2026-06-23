@@ -395,10 +395,20 @@ textarea {
   font-size: 18px;
 }
 
+.teaching-section h4 {
+  margin: 14px 0 8px;
+  font-size: 15px;
+  color: var(--text);
+}
+
 .teaching-section p,
 .teaching-section li {
   color: var(--muted);
   line-height: 1.8;
+}
+
+.teaching-section p {
+  margin: 8px 0;
 }
 
 .teaching-section ol,
@@ -408,6 +418,7 @@ textarea {
 }
 
 .example-box {
+  margin: 10px 0;
   padding: 12px;
   border-left: 4px solid var(--green);
   border-radius: 6px;
