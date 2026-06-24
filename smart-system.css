@@ -371,11 +371,44 @@ textarea {
 .priority span,
 .history span,
 .source-item span,
-.question-meta {
+.question-meta,
+.question-source {
   display: block;
   margin-top: 5px;
   color: var(--muted);
   font-size: 13px;
+}
+
+.question-source {
+  color: #4b6f61;
+  font-weight: 800;
+}
+
+.record-library {
+  display: grid;
+  gap: 14px;
+}
+
+.record-library-section {
+  display: grid;
+  gap: 10px;
+}
+
+.subject-material-group {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.subject-material-group h4 {
+  margin: 0;
+}
+
+.material-history {
+  background: #fbfdfb;
 }
 
 .teaching-content {

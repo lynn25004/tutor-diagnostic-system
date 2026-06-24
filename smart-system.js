@@ -257,7 +257,7 @@ function initTeacher() {
     location.href = "./teacher-login.html";
   });
 
-  document.querySelector("#buildTestBtn").addEventListener("click", () => {
+  document.querySelector("#buildTestBtn").addEventListener("click", async () => {
     const config = {
       id: uid("test"),
       studentName: els.studentName.value.trim() || "未命名學生",
@@ -272,7 +272,8 @@ function initTeacher() {
       teacherNote: els.teacherNote.value.trim(),
       createdAt: new Date().toISOString()
     };
-    const questions = pickQuestions(config);
+    const officialItems = await loadOfficialQuestionBank();
+    const questions = pickQuestions(config, officialItems);
     writeJson(STORAGE_KEYS.activeTest, { config, questions });
     localStorage.removeItem(STORAGE_KEYS.latestSubmission);
     writeJson(STORAGE_KEYS.bankVersion, bankVersion);
@@ -282,6 +283,7 @@ function initTeacher() {
 
   document.querySelector("#saveRecordBtn").addEventListener("click", saveLatestRecord);
   document.querySelector("#saveLongNoteBtn").addEventListener("click", saveLongNote);
+  document.querySelector("#generateMaterialFromRecordBtn").addEventListener("click", generateMaterialFromRecord);
   document.querySelector("#exportRecordBtn").addEventListener("click", exportRecord);
   document.querySelector("#syncSourcesBtn").addEventListener("click", syncOfficialSources);
   document.querySelector("#refreshImportBtn").addEventListener("click", renderImportPanel);
@@ -292,9 +294,20 @@ function initTeacher() {
   renderTeacher();
 }
 
-function pickQuestions(config) {
+async function loadOfficialQuestionBank() {
+  const items = await apiGet("/api/import/official-bank", []);
+  return Array.isArray(items) ? items : [];
+}
+
+function pickQuestions(config, officialItems = []) {
   const order = config.subject === "all" ? subjectOrder[config.stage] : [config.subject];
   const picked = [];
+
+  officialQuestionPool(config, officialItems).forEach((question) => {
+    if (picked.length < Math.max(1, Math.floor(config.count / 3)) && !picked.some((item) => item.id === question.id)) {
+      picked.push(question);
+    }
+  });
 
   order.forEach((subject) => {
     const pool = rankedPool(config, subject).filter((question) => !picked.some((item) => item.id === question.id));
@@ -335,6 +348,77 @@ function rankedPool(config, subject) {
     })
     .sort((a, b) => b.score - a.score)
     .map((item) => item.question);
+}
+
+function officialQuestionPool(config, officialItems) {
+  return officialItems
+    .filter((item) => officialMatchesConfig(item, config))
+    .flatMap((item, index) => officialItemToQuestions(item, config, index))
+    .sort((a, b) => (b.year || 0) - (a.year || 0));
+}
+
+function officialMatchesConfig(item, config) {
+  const text = `${item.subject || ""} ${item.title || ""} ${item.sourceTitle || ""} ${item.url || ""}`.toLowerCase();
+  if (config.stage === "elementary" && /會考|國中/.test(text)) return false;
+  if (config.subject === "all") return true;
+  const subjectLabel = subjectLabels[config.subject] || "";
+  if (text.includes(subjectLabel)) return true;
+  if (config.subject === "math" && /數學|math/.test(text)) return true;
+  if (config.subject === "chinese" && /國文|chinese/.test(text)) return true;
+  if (config.subject === "english" && /英語|英文|english/.test(text)) return true;
+  if (config.subject.startsWith("social") && /社會|地理|歷史|公民/.test(text)) return true;
+  if (config.subject.startsWith("science") && /自然|生物|理化|物理|化學/.test(text)) return true;
+  return false;
+}
+
+function officialItemToQuestions(item, config, index) {
+  const subject = normalizeOfficialSubject(item.subject, config);
+  const yearText = item.year ? `${item.year} 年` : "近年";
+  const source = `${yearText}${item.subject || subjectLabels[subject] || ""}官方題本：${item.title || item.sourceTitle || "未命名來源"}`;
+  const urlText = item.url ? `｜${item.url}` : "";
+  const preview = cleanPreview(item.textPreview || item.extractedText || item.title || "");
+  const prompt = preview
+    ? `根據「${item.title || source}」的題材摘要判斷：${preview.slice(0, 80)}。這類題目最需要先做哪一件事？`
+    : `參考 ${source} 的題型，作答時最重要的第一步是什麼？`;
+
+  return [{
+    id: `official-${item.id || index}`,
+    stage: config.stage,
+    grades: [config.grade],
+    subject,
+    goals: [config.goal],
+    skill: "官方來源題材判讀",
+    prompt,
+    options: ["先找題目問法與資料線索", "直接背最後一句", "只看選項最長者", "忽略來源與年份"],
+    answer: "先找題目問法與資料線索",
+    trend: "官方題本來源題材，需人工審題後使用；本題為來源題材類題",
+    source: `${source}${urlText}`,
+    year: item.year || 0,
+    explanation: "正式官方題多重視資料判讀與題幹線索。作答時應先確認題目問法，再回到資料找證據。"
+  }];
+}
+
+function normalizeOfficialSubject(subject, config) {
+  const text = `${subject || ""} ${config.subject || ""}`;
+  if (/國文/.test(text)) return "chinese";
+  if (/英語|英文/.test(text)) return "english";
+  if (/數學/.test(text)) return "math";
+  if (/地理/.test(text)) return "social_geography";
+  if (/歷史/.test(text)) return "social_history";
+  if (/公民/.test(text)) return "social_civics";
+  if (/生物/.test(text)) return "science_biology";
+  if (/物理|理化/.test(text)) return "science_physics";
+  if (/化學/.test(text)) return "science_chemistry";
+  if (/自然/.test(text)) return config.stage === "junior" ? "science_biology" : "science";
+  if (/社會/.test(text)) return config.stage === "junior" ? "social_geography" : "social";
+  return config.subject === "all" ? subjectOrder[config.stage][0] : config.subject;
+}
+
+function cleanPreview(value) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .replace(/[^\u4e00-\u9fa5A-Za-z0-9，。！？、：；（）() -]/g, "")
+    .trim();
 }
 
 function makeGeneratedQuestion(config, subject, index) {
@@ -1223,6 +1307,7 @@ function renderExerciseSet(exercises, includeBlank) {
       <span>${escapeHtml(item.level)}｜${escapeHtml(item.subject)}｜${escapeHtml(item.skill)}</span>
       <strong>${item.no}. ${escapeHtml(item.prompt)}</strong>
       ${item.options.length ? `<ol type="A">${item.options.map((option) => `<li>${escapeHtml(option)}</li>`).join("")}</ol>` : ""}
+      <span>來源：${escapeHtml(item.source)}</span>
       ${includeBlank ? `<p class="blank-line">關鍵線索：__________</p><p class="blank-line">答案與理由：__________</p>` : ""}
     </div>
   `).join("");
@@ -1248,6 +1333,7 @@ function initStudent() {
   questionList.innerHTML = active.questions.map((question, index) => `
     <article class="question-card">
       <span class="question-meta">${subjectLabels[question.subject]}｜${question.skill}</span>
+      <span class="question-source">${escapeHtml(question.source || "系統生成類題")}｜${escapeHtml(question.trend || "一般診斷題")}</span>
       <h3>${index + 1}. ${escapeHtml(question.prompt)}</h3>
       <div class="option-grid">
         ${question.options.map((option) => `
@@ -1293,16 +1379,39 @@ async function saveLatestRecord() {
       studentName: submission.config.studentName,
       gradeLabel: submission.config.gradeLabel,
       longNote: "",
-      histories: []
+      histories: [],
+      materials: []
     };
     records.unshift(record);
   }
+  record.materials ||= [];
   if (!record.histories.some((item) => item.id === submission.id)) {
     record.histories.unshift(submission);
   }
+  saveMaterialSnapshot(record, submission, "測驗後自動生成教材");
   await setRecords(records);
   await renderRecords();
-  alert("已儲存到學生檔案。");
+  alert("已儲存到學生檔案，並加入學生專屬教材庫。");
+}
+
+function saveMaterialSnapshot(record, submission, note) {
+  const materialId = `material-${submission.id}`;
+  if (record.materials.some((item) => item.id === materialId)) return;
+  record.materials.unshift({
+    id: materialId,
+    studentName: submission.config.studentName,
+    gradeLabel: submission.config.gradeLabel,
+    subject: submission.config.subject,
+    subjectLabel: submission.config.subjectLabel,
+    goalLabel: submission.config.goalLabel,
+    createdAt: new Date().toISOString(),
+    sourceSubmissionId: submission.id,
+    note,
+    title: submission.teaching.title,
+    accuracy: submission.report.accuracy,
+    focus: submission.report.priorities[0]?.skill || "綜合複習",
+    teaching: submission.teaching
+  });
 }
 
 async function getRecords() {
@@ -1330,17 +1439,57 @@ async function renderRecords() {
     const record = records.find((item) => item.id === select.value);
     longNote.value = record?.longNote || "";
     historyList.innerHTML = record
-      ? record.histories.map((history) => `
-          <div class="history">
-            <strong>${formatDate(history.submittedAt)}｜${history.config.subjectLabel}｜${history.report.accuracy}%</strong>
-            <span>${escapeHtml(history.report.level)}；${escapeHtml(history.report.priorities[0]?.skill || "無明顯弱點")}</span>
-          </div>
-        `).join("")
+      ? renderRecordLibrary(record)
       : `<div class="notice">尚無歷次診斷。</div>`;
   }
 
   select.onchange = renderSelected;
   renderSelected();
+}
+
+function renderRecordLibrary(record) {
+  const histories = record.histories || [];
+  const materials = record.materials || [];
+  const materialGroups = groupBy(materials, (item) => item.subjectLabel || subjectLabels[item.subject] || "未分類科目");
+
+  return `
+    <div class="record-library">
+      <div class="record-library-section">
+        <strong>教材庫依科目整理</strong>
+        ${materials.length ? Object.entries(materialGroups).map(([subject, items]) => `
+          <div class="subject-material-group">
+            <h4>${escapeHtml(subject)}</h4>
+            ${items.map((material) => `
+              <div class="history material-history">
+                <strong>${escapeHtml(material.title)}</strong>
+                <span>${formatDate(material.createdAt)}｜${escapeHtml(material.goalLabel)}｜診斷 ${material.accuracy}%｜重點：${escapeHtml(material.focus)}</span>
+                <span>${escapeHtml(material.note || "學生專屬教材")}</span>
+              </div>
+            `).join("")}
+          </div>
+        `).join("") : `<div class="notice">尚未儲存教材。完成測驗後按「儲存到學生檔案」，教材會自動放入這裡。</div>`}
+      </div>
+      <div class="record-library-section">
+        <strong>歷次診斷</strong>
+        ${histories.length ? histories.map((history) => `
+          <div class="history">
+            <strong>${formatDate(history.submittedAt)}｜${history.config.subjectLabel}｜${history.report.accuracy}%</strong>
+            <span>${escapeHtml(history.report.level)}；${escapeHtml(history.report.priorities[0]?.skill || "無明顯弱點")}</span>
+            <span>教材：${history.teaching?.title ? escapeHtml(history.teaching.title) : "尚未產生教材"}</span>
+          </div>
+        `).join("") : `<div class="notice">尚無歷次診斷。</div>`}
+      </div>
+    </div>
+  `;
+}
+
+function groupBy(items, picker) {
+  return items.reduce((groups, item) => {
+    const key = picker(item);
+    groups[key] ||= [];
+    groups[key].push(item);
+    return groups;
+  }, {});
 }
 
 async function saveLongNote() {
@@ -1351,6 +1500,31 @@ async function saveLongNote() {
   record.longNote = document.querySelector("#longNote").value.trim();
   await setRecords(records);
   alert("長期紀錄已更新。");
+}
+
+async function generateMaterialFromRecord() {
+  const records = await getRecords();
+  const select = document.querySelector("#recordSelect");
+  const record = records.find((item) => item.id === select.value);
+  const latest = record?.histories?.[0];
+  if (!record || !latest) {
+    alert("這位學生尚無診斷紀錄，至少需要一次測驗或診斷資料才能生成專屬教材。");
+    return;
+  }
+
+  const regenerated = {
+    ...latest,
+    id: uid("submission"),
+    submittedAt: new Date().toISOString(),
+    teaching: buildTeaching(latest)
+  };
+  record.materials ||= [];
+  saveMaterialSnapshot(record, regenerated, "依最近診斷重新生成教材，未重新測驗");
+  await setRecords(records);
+  await renderRecords();
+  writeJson(STORAGE_KEYS.latestSubmission, regenerated);
+  renderReport(regenerated);
+  alert("已依最近一次診斷重新生成教材，並存入學生教材庫。");
 }
 
 async function exportRecord() {
@@ -1378,6 +1552,24 @@ function renderSources() {
     </div>
   `).join("");
   loadServerSources();
+  renderOfficialBankStatus();
+}
+
+async function renderOfficialBankStatus() {
+  const sourceList = document.querySelector("#sourceList");
+  if (!sourceList || location.protocol === "file:") return;
+  sourceList.querySelector(".official-bank-status")?.remove();
+  const bank = await loadOfficialQuestionBank();
+  const status = bank.length
+    ? `正式題庫已有 ${bank.length} 筆核准官方來源。建立測驗時會優先抽取部分官方來源題材類題。`
+    : "正式題庫目前沒有核准官方來源。系統會使用內建題庫與動態生成類題；若要使用考古題來源，請先同步官方來源、下載 PDF、人工核准。";
+  sourceList.insertAdjacentHTML("afterbegin", `
+    <div class="source-item official-bank-status">
+      <strong>正式題庫狀態</strong>
+      <span>${escapeHtml(status)}</span>
+      <p>說明：為避免錯誤或版權風險，系統不會假裝所有題目都是考古題；只有核准過的官方來源會顯示年份與來源標籤。</p>
+    </div>
+  `);
 }
 
 async function loadServerSources() {
@@ -1453,6 +1645,7 @@ function renderServerSources(payload) {
       ${source.url ? `<a href="${source.url}" target="_blank" rel="noreferrer">查看來源</a>` : ""}
     </div>
   `).join("");
+  renderOfficialBankStatus();
 }
 
 async function renderImportPanel() {
