@@ -9,6 +9,8 @@ const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path
 const pdfDir = path.join(dataDir, "pdf-cache");
 const sourceFile = path.join(dataDir, "source-cache.json");
 const recordsFile = path.join(dataDir, "records.json");
+const testsFile = path.join(dataDir, "diagnostic-tests.json");
+const submissionsFile = path.join(dataDir, "diagnostic-submissions.json");
 const pendingImportFile = path.join(dataDir, "pending-imports.json");
 const officialBankFile = path.join(dataDir, "official-question-bank.json");
 const port = Number(process.env.PORT || 4173);
@@ -30,6 +32,8 @@ fs.mkdirSync(dataDir, { recursive: true });
 fs.mkdirSync(pdfDir, { recursive: true });
 ensureJson(sourceFile, { updatedAt: null, sources: [], notes: [] });
 ensureJson(recordsFile, []);
+ensureJson(testsFile, []);
+ensureJson(submissionsFile, []);
 ensureJson(pendingImportFile, []);
 ensureJson(officialBankFile, []);
 
@@ -105,6 +109,62 @@ async function setRecordsStore(records) {
         grade_label: record.gradeLabel,
         payload: record,
         updated_at: new Date().toISOString()
+      })),
+      prefer: "return=minimal"
+    });
+  }
+}
+
+async function getTestsStore() {
+  if (!hasSupabase) return readJson(testsFile, []);
+  const rows = await supabaseRequest("diagnostic_tests", {
+    query: "?select=payload&order=updated_at.desc"
+  });
+  return rows.map((row) => row.payload);
+}
+
+async function setTestsStore(tests) {
+  if (!hasSupabase) {
+    writeJson(testsFile, tests);
+    return;
+  }
+  await supabaseRequest("diagnostic_tests", { method: "DELETE", query: "?id=not.is.null" });
+  if (tests.length) {
+    await supabaseRequest("diagnostic_tests", {
+      method: "POST",
+      body: tests.map((test) => ({
+        id: test.id,
+        code: test.code,
+        payload: test,
+        updated_at: new Date().toISOString()
+      })),
+      prefer: "return=minimal"
+    });
+  }
+}
+
+async function getSubmissionsStore() {
+  if (!hasSupabase) return readJson(submissionsFile, []);
+  const rows = await supabaseRequest("diagnostic_submissions", {
+    query: "?select=payload&order=submitted_at.desc"
+  });
+  return rows.map((row) => row.payload);
+}
+
+async function setSubmissionsStore(submissions) {
+  if (!hasSupabase) {
+    writeJson(submissionsFile, submissions);
+    return;
+  }
+  await supabaseRequest("diagnostic_submissions", { method: "DELETE", query: "?id=not.is.null" });
+  if (submissions.length) {
+    await supabaseRequest("diagnostic_submissions", {
+      method: "POST",
+      body: submissions.map((submission) => ({
+        id: submission.id,
+        test_code: submission.testCode || submission.config?.testCode || null,
+        payload: submission,
+        submitted_at: submission.submittedAt || new Date().toISOString()
       })),
       prefer: "return=minimal"
     });
@@ -507,6 +567,42 @@ function textQuality(text) {
   return meaningful / Math.max(text.length, 1);
 }
 
+function makeTestCode() {
+  return crypto.randomBytes(4).toString("hex").slice(0, 6).toUpperCase();
+}
+
+async function createDiagnosticTest(body) {
+  const tests = await getTestsStore();
+  let code = makeTestCode();
+  while (tests.some((test) => test.code === code)) code = makeTestCode();
+  const test = {
+    id: body.config?.id || safeId(`${code}-${Date.now()}`),
+    code,
+    config: { ...body.config, testCode: code },
+    questions: body.questions || [],
+    createdAt: new Date().toISOString(),
+    status: "active"
+  };
+  await setTestsStore([test, ...tests.filter((item) => item.id !== test.id && item.code !== code)]);
+  return test;
+}
+
+async function getDiagnosticTest(code) {
+  const tests = await getTestsStore();
+  return tests.find((test) => test.code === String(code || "").toUpperCase() && test.status !== "closed") || null;
+}
+
+async function saveDiagnosticSubmission(body) {
+  const submissions = await getSubmissionsStore();
+  const submission = {
+    ...body,
+    testCode: body.testCode || body.config?.testCode || null,
+    submittedAt: body.submittedAt || new Date().toISOString()
+  };
+  await setSubmissionsStore([submission, ...submissions.filter((item) => item.id !== submission.id)]);
+  return submission;
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${port}`);
 
@@ -566,6 +662,42 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       await setRecordsStore(body);
       send(res, 200, { ok: true, savedAt: new Date().toISOString() });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/tests") {
+      if (!requireTeacher(req, res)) return;
+      const test = await createDiagnosticTest(await readBody(req));
+      send(res, 200, {
+        ok: true,
+        test,
+        code: test.code,
+        studentUrl: `/student.html?code=${encodeURIComponent(test.code)}`
+      });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname.startsWith("/api/tests/")) {
+      const code = decodeURIComponent(url.pathname.split("/").pop());
+      const test = await getDiagnosticTest(code);
+      if (!test) {
+        send(res, 404, { ok: false, error: "找不到測驗代碼" });
+        return;
+      }
+      send(res, 200, test);
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/submissions") {
+      const submission = await saveDiagnosticSubmission(await readBody(req));
+      send(res, 200, { ok: true, submission });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/submissions/latest") {
+      if (!requireTeacher(req, res)) return;
+      const submissions = await getSubmissionsStore();
+      send(res, 200, submissions[0] || null);
       return;
     }
 

@@ -202,6 +202,20 @@ async function apiPost(path, value) {
   }
 }
 
+async function apiPostJson(path, value) {
+  if (location.protocol === "file:") return null;
+  try {
+    const response = await fetch(path, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(value)
+    });
+    return response.ok ? response.json() : null;
+  } catch {
+    return null;
+  }
+}
+
 function uid(prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
@@ -274,11 +288,18 @@ function initTeacher() {
     };
     const officialItems = await loadOfficialQuestionBank();
     const questions = pickQuestions(config, officialItems);
-    writeJson(STORAGE_KEYS.activeTest, { config, questions });
+    const activeTest = { config, questions };
+    const serverTest = await apiPostJson("/api/tests", activeTest);
+    if (serverTest?.test) {
+      activeTest.config = serverTest.test.config;
+      activeTest.code = serverTest.code;
+    }
+    writeJson(STORAGE_KEYS.activeTest, activeTest);
     localStorage.removeItem(STORAGE_KEYS.latestSubmission);
     writeJson(STORAGE_KEYS.bankVersion, bankVersion);
     renderTeacher();
-    alert("測驗已建立。請開啟學生作答頁。");
+    renderTestInvite(activeTest, serverTest);
+    alert(serverTest?.code ? `測驗已建立。學生代碼：${serverTest.code}` : "測驗已建立。請開啟學生作答頁。");
   });
 
   document.querySelector("#saveRecordBtn").addEventListener("click", saveLatestRecord);
@@ -292,6 +313,24 @@ function initTeacher() {
   renderSources();
   renderImportPanel();
   renderTeacher();
+}
+
+function renderTestInvite(activeTest, serverTest) {
+  const box = document.querySelector("#testInviteBox");
+  if (!box) return;
+  const code = serverTest?.code || activeTest.code || activeTest.config?.testCode;
+  if (!code) {
+    box.classList.add("hidden");
+    return;
+  }
+  const url = new URL("./student.html", location.href);
+  url.searchParams.set("code", code);
+  box.classList.remove("hidden");
+  box.innerHTML = `
+    <strong>學生測驗代碼：${escapeHtml(code)}</strong>
+    <p>學生可輸入代碼，或直接開啟這個連結作答：</p>
+    <p><a href="${url.toString()}" target="_blank" rel="noreferrer">${escapeHtml(url.toString())}</a></p>
+  `;
 }
 
 async function loadOfficialQuestionBank() {
@@ -705,9 +744,9 @@ const generatedTemplates = {
   ]
 };
 
-function renderTeacher() {
+async function renderTeacher() {
   const active = readJson(STORAGE_KEYS.activeTest, null);
-  const submission = readJson(STORAGE_KEYS.latestSubmission, null);
+  const submission = await getLatestSubmission();
   const version = readJson(STORAGE_KEYS.bankVersion, bankVersion);
 
   document.querySelector("#activeTestLabel").textContent = active ? `${active.config.studentName}・${active.config.gradeLabel}・${active.config.subjectLabel}` : "尚未建立";
@@ -716,6 +755,16 @@ function renderTeacher() {
 
   renderReport(submission);
   renderRecords();
+}
+
+async function getLatestSubmission() {
+  const local = readJson(STORAGE_KEYS.latestSubmission, null);
+  const remote = await apiGet("/api/submissions/latest", null);
+  if (remote) {
+    writeJson(STORAGE_KEYS.latestSubmission, remote);
+    return remote;
+  }
+  return local;
 }
 
 function renderReport(submission) {
@@ -1313,18 +1362,36 @@ function renderExerciseSet(exercises, includeBlank) {
   `).join("");
 }
 
-function initStudent() {
-  const active = readJson(STORAGE_KEYS.activeTest, null);
+async function initStudent() {
+  const urlCode = new URLSearchParams(location.search).get("code");
+  const active = urlCode
+    ? await loadTestByCode(urlCode)
+    : readJson(STORAGE_KEYS.activeTest, null);
+  const codeEntryBox = document.querySelector("#codeEntryBox");
+  const testCodeInput = document.querySelector("#testCodeInput");
+  const loadTestCodeBtn = document.querySelector("#loadTestCodeBtn");
   const doneBox = document.querySelector("#doneBox");
   const emptyQuiz = document.querySelector("#emptyQuiz");
   const questionList = document.querySelector("#questionList");
   const submitBtn = document.querySelector("#submitStudentBtn");
+
+  loadTestCodeBtn?.addEventListener("click", async () => {
+    const code = testCodeInput.value.trim();
+    if (!code) return;
+    const next = await loadTestByCode(code);
+    if (!next) {
+      alert("找不到這組測驗代碼，請向老師確認。");
+      return;
+    }
+    location.href = `./student.html?code=${encodeURIComponent(code.toUpperCase())}`;
+  });
 
   if (!active) {
     submitBtn.classList.add("hidden");
     return;
   }
 
+  codeEntryBox?.classList.add("hidden");
   document.querySelector("#quizStudent").textContent = active.config.studentName;
   document.querySelector("#quizScope").textContent = `${active.config.gradeLabel}・${active.config.subjectLabel}・${active.config.goalLabel}`;
   document.querySelector("#quizCount").textContent = String(active.questions.length);
@@ -1354,6 +1421,7 @@ function initStudent() {
     });
     const submission = {
       id: uid("submission"),
+      testCode: active.code || active.config.testCode || "",
       submittedAt: new Date().toISOString(),
       config: active.config,
       questions: active.questions,
@@ -1362,10 +1430,25 @@ function initStudent() {
     submission.report = buildReport(submission);
     submission.teaching = buildTeaching(submission);
     writeJson(STORAGE_KEYS.latestSubmission, submission);
+    apiPost("/api/submissions", submission);
     questionList.classList.add("hidden");
     submitBtn.classList.add("hidden");
     doneBox.classList.remove("hidden");
   });
+}
+
+async function loadTestByCode(code) {
+  const cleanCode = String(code || "").trim().toUpperCase();
+  if (!cleanCode) return null;
+  const test = await apiGet(`/api/tests/${encodeURIComponent(cleanCode)}`, null);
+  if (!test) return null;
+  const active = {
+    code: test.code,
+    config: test.config,
+    questions: test.questions
+  };
+  writeJson(STORAGE_KEYS.activeTest, active);
+  return active;
 }
 
 async function saveLatestRecord() {

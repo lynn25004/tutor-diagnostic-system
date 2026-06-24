@@ -264,6 +264,13 @@ textarea {
   margin-top: 16px;
 }
 
+.code-entry {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  gap: 10px;
+  margin-top: 10px;
+}
+
 .primary-btn,
 .ghost-btn {
   display: inline-flex;
@@ -619,7 +626,8 @@ textarea {
   }
 
   .form-grid,
-  .option-grid {
+  .option-grid,
+  .code-entry {
     grid-template-columns: 1fr;
   }
 
