@@ -19,6 +19,10 @@ const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 const hasSupabase = Boolean(supabaseUrl && supabaseKey);
 const teacherAccessCode = process.env.TEACHER_ACCESS_CODE || "";
 const teacherCookieName = "td_teacher_session";
+const bodyLimitBytes = Number(process.env.BODY_LIMIT_BYTES || 5 * 1024 * 1024);
+const maxStoredTests = Number(process.env.MAX_STORED_TESTS || 200);
+const maxStoredSubmissions = Number(process.env.MAX_STORED_SUBMISSIONS || 500);
+const isSecureRuntime = process.env.NODE_ENV === "production" || Boolean(process.env.RENDER);
 
 const mime = {
   ".html": "text/html; charset=utf-8",
@@ -27,6 +31,18 @@ const mime = {
   ".svg": "image/svg+xml",
   ".json": "application/json; charset=utf-8"
 };
+
+const publicStaticFiles = new Set([
+  "/index.html",
+  "/teacher.html",
+  "/teacher-login.html",
+  "/student.html",
+  "/smart-system.css",
+  "/smart-system.js",
+  "/favicon.svg",
+  "/styles.css",
+  "/app.js"
+]);
 
 fs.mkdirSync(dataDir, { recursive: true });
 fs.mkdirSync(pdfDir, { recursive: true });
@@ -86,6 +102,16 @@ async function supabaseRequest(table, options = {}) {
   return text ? JSON.parse(text) : null;
 }
 
+async function supabaseUpsert(table, rows, conflictKey = "id") {
+  if (!rows.length) return;
+  await supabaseRequest(table, {
+    method: "POST",
+    query: `?on_conflict=${encodeURIComponent(conflictKey)}`,
+    body: rows,
+    prefer: "resolution=merge-duplicates,return=minimal"
+  });
+}
+
 async function getRecordsStore() {
   if (!hasSupabase) return readJson(recordsFile, []);
   const rows = await supabaseRequest("student_records", {
@@ -95,24 +121,18 @@ async function getRecordsStore() {
 }
 
 async function setRecordsStore(records) {
+  const safeRecords = Array.isArray(records) ? records.filter((record) => record?.id) : [];
   if (!hasSupabase) {
-    writeJson(recordsFile, records);
+    writeJson(recordsFile, safeRecords);
     return;
   }
-  await supabaseRequest("student_records", { method: "DELETE", query: "?id=not.is.null" });
-  if (records.length) {
-    await supabaseRequest("student_records", {
-      method: "POST",
-      body: records.map((record) => ({
-        id: record.id,
-        student_name: record.studentName,
-        grade_label: record.gradeLabel,
-        payload: record,
-        updated_at: new Date().toISOString()
-      })),
-      prefer: "return=minimal"
-    });
-  }
+  await supabaseUpsert("student_records", safeRecords.map((record) => ({
+    id: record.id,
+    student_name: record.studentName,
+    grade_label: record.gradeLabel,
+    payload: record,
+    updated_at: new Date().toISOString()
+  })));
 }
 
 async function getTestsStore() {
@@ -124,23 +144,17 @@ async function getTestsStore() {
 }
 
 async function setTestsStore(tests) {
+  const safeTests = Array.isArray(tests) ? tests.filter((test) => test?.id).slice(0, maxStoredTests) : [];
   if (!hasSupabase) {
-    writeJson(testsFile, tests);
+    writeJson(testsFile, safeTests);
     return;
   }
-  await supabaseRequest("diagnostic_tests", { method: "DELETE", query: "?id=not.is.null" });
-  if (tests.length) {
-    await supabaseRequest("diagnostic_tests", {
-      method: "POST",
-      body: tests.map((test) => ({
-        id: test.id,
-        code: test.code,
-        payload: test,
-        updated_at: new Date().toISOString()
-      })),
-      prefer: "return=minimal"
-    });
-  }
+  await supabaseUpsert("diagnostic_tests", safeTests.map((test) => ({
+    id: test.id,
+    code: test.code,
+    payload: test,
+    updated_at: new Date().toISOString()
+  })));
 }
 
 async function getSubmissionsStore() {
@@ -152,23 +166,19 @@ async function getSubmissionsStore() {
 }
 
 async function setSubmissionsStore(submissions) {
+  const safeSubmissions = Array.isArray(submissions)
+    ? submissions.filter((submission) => submission?.id).slice(0, maxStoredSubmissions)
+    : [];
   if (!hasSupabase) {
-    writeJson(submissionsFile, submissions);
+    writeJson(submissionsFile, safeSubmissions);
     return;
   }
-  await supabaseRequest("diagnostic_submissions", { method: "DELETE", query: "?id=not.is.null" });
-  if (submissions.length) {
-    await supabaseRequest("diagnostic_submissions", {
-      method: "POST",
-      body: submissions.map((submission) => ({
-        id: submission.id,
-        test_code: submission.testCode || submission.config?.testCode || null,
-        payload: submission,
-        submitted_at: submission.submittedAt || new Date().toISOString()
-      })),
-      prefer: "return=minimal"
-    });
-  }
+  await supabaseUpsert("diagnostic_submissions", safeSubmissions.map((submission) => ({
+    id: submission.id,
+    test_code: submission.testCode || submission.config?.testCode || null,
+    payload: submission,
+    submitted_at: submission.submittedAt || new Date().toISOString()
+  })));
 }
 
 async function getOfficialBankStore() {
@@ -180,40 +190,43 @@ async function getOfficialBankStore() {
 }
 
 async function setOfficialBankStore(items) {
+  const safeItems = Array.isArray(items) ? items.filter((item) => item?.id) : [];
   if (!hasSupabase) {
-    writeJson(officialBankFile, items);
+    writeJson(officialBankFile, safeItems);
     return;
   }
-  await supabaseRequest("official_question_bank", { method: "DELETE", query: "?id=not.is.null" });
-  if (items.length) {
-    await supabaseRequest("official_question_bank", {
-      method: "POST",
-      body: items.map((item) => ({
-        id: item.id,
-        year: item.year,
-        subject: item.subject,
-        title: item.title,
-        source_url: item.url,
-        payload: item,
-        approved_at: item.approvedAt || new Date().toISOString()
-      })),
-      prefer: "return=minimal"
-    });
-  }
+  await supabaseUpsert("official_question_bank", safeItems.map((item) => ({
+    id: item.id,
+    year: item.year,
+    subject: item.subject,
+    title: item.title,
+    source_url: item.url,
+    payload: item,
+    approved_at: item.approvedAt || new Date().toISOString()
+  })));
+}
+
+function responseHeaders(type) {
+  return {
+    "content-type": type,
+    "cache-control": "no-store",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "permissions-policy": "camera=(), microphone=(), geolocation=()",
+    "content-security-policy": "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; base-uri 'self'; frame-ancestors 'none'"
+  };
 }
 
 function send(res, status, body, type = "application/json; charset=utf-8") {
-  res.writeHead(status, {
-    "content-type": type,
-    "cache-control": "no-store"
-  });
+  res.writeHead(status, responseHeaders(type));
   res.end(typeof body === "string" || Buffer.isBuffer(body) ? body : JSON.stringify(body, null, 2));
 }
 
 function redirect(res, location) {
   res.writeHead(302, {
+    ...responseHeaders("text/plain; charset=utf-8"),
     location,
-    "cache-control": "no-store"
   });
   res.end();
 }
@@ -252,7 +265,7 @@ function requireTeacher(req, res) {
 function setTeacherCookie(res) {
   res.setHeader(
     "set-cookie",
-    `${teacherCookieName}=${encodeURIComponent(teacherSessionToken())}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000`
+    `${teacherCookieName}=${encodeURIComponent(teacherSessionToken())}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${isSecureRuntime ? "; Secure" : ""}`
   );
 }
 
@@ -267,8 +280,14 @@ function serveStatic(req, res) {
   const requested = decodeURIComponent(new URL(req.url, `http://localhost:${port}`).pathname);
   const safePath = requested === "/" ? "/index.html" : requested;
   const filePath = path.normalize(path.join(root, safePath));
+  const relativePath = path.relative(root, filePath);
 
-  if (!filePath.startsWith(root)) {
+  if (!publicStaticFiles.has(safePath)) {
+    send(res, 404, "Not found", "text/plain; charset=utf-8");
+    return;
+  }
+
+  if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
     send(res, 403, "Forbidden", "text/plain; charset=utf-8");
     return;
   }
@@ -369,9 +388,24 @@ function cleanText(value) {
 
 async function readBody(req) {
   const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > bodyLimitBytes) {
+      const error = new Error("傳送資料太大，請縮小附件或分批保存。");
+      error.statusCode = 413;
+      throw error;
+    }
+    chunks.push(chunk);
+  }
   const text = Buffer.concat(chunks).toString("utf8").replace(/^\uFEFF/, "");
-  return text ? JSON.parse(text) : {};
+  try {
+    return text ? JSON.parse(text) : {};
+  } catch {
+    const error = new Error("JSON 格式不正確。");
+    error.statusCode = 400;
+    throw error;
+  }
 }
 
 function importCandidates() {
@@ -572,6 +606,16 @@ function makeTestCode() {
 }
 
 async function createDiagnosticTest(body) {
+  if (!body || typeof body !== "object") {
+    const error = new Error("測驗資料格式不正確。");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!body.config?.studentName || !Array.isArray(body.questions) || !body.questions.length) {
+    const error = new Error("請先建立包含學生姓名與題目的測驗。");
+    error.statusCode = 400;
+    throw error;
+  }
   const tests = await getTestsStore();
   let code = makeTestCode();
   while (tests.some((test) => test.code === code)) code = makeTestCode();
@@ -593,10 +637,26 @@ async function getDiagnosticTest(code) {
 }
 
 async function saveDiagnosticSubmission(body) {
+  if (!body || typeof body !== "object" || !body.id || !body.config || !Array.isArray(body.questions)) {
+    const error = new Error("作答資料格式不正確。");
+    error.statusCode = 400;
+    throw error;
+  }
+  const testCode = body.testCode || body.config?.testCode || null;
+  if (!testCode) {
+    const error = new Error("缺少測驗代碼，請使用老師提供的作答連結。");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!(await getDiagnosticTest(testCode))) {
+    const error = new Error("測驗代碼已失效或不存在，請向老師確認新連結。");
+    error.statusCode = 404;
+    throw error;
+  }
   const submissions = await getSubmissionsStore();
   const submission = {
     ...body,
-    testCode: body.testCode || body.config?.testCode || null,
+    testCode,
     submittedAt: body.submittedAt || new Date().toISOString()
   };
   await setSubmissionsStore([submission, ...submissions.filter((item) => item.id !== submission.id)]);
@@ -613,7 +673,15 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "GET" && url.pathname === "/api/health") {
-      send(res, 200, { ok: true, port, storage: hasSupabase ? "supabase" : "json", now: new Date().toISOString() });
+      send(res, 200, {
+        ok: true,
+        port,
+        storage: hasSupabase ? "supabase" : "json",
+        teacherAuth: Boolean(teacherAccessCode),
+        bodyLimitBytes,
+        version: process.env.RENDER_GIT_COMMIT || "local",
+        now: new Date().toISOString()
+      });
       return;
     }
 
@@ -733,7 +801,7 @@ const server = http.createServer(async (req, res) => {
 
     serveStatic(req, res);
   } catch (error) {
-    send(res, 500, { ok: false, error: error.message });
+    send(res, error.statusCode || 500, { ok: false, error: error.message });
   }
 });
 
