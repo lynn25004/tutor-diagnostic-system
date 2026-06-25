@@ -271,7 +271,9 @@ function initTeacher() {
     location.href = "./teacher-login.html";
   });
 
-  document.querySelector("#buildTestBtn").addEventListener("click", async () => {
+  document.querySelector("#buildTestBtn").addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    setButtonBusy(button, true, "建立中...");
     const config = {
       id: uid("test"),
       studentName: els.studentName.value.trim() || "未命名學生",
@@ -286,28 +288,32 @@ function initTeacher() {
       teacherNote: els.teacherNote.value.trim(),
       createdAt: new Date().toISOString()
     };
-    const officialItems = await loadOfficialQuestionBank();
-    const questions = pickQuestions(config, officialItems);
-    const activeTest = { config, questions };
-    const serverTest = await apiPostJson("/api/tests", activeTest);
-    if (serverTest?.test) {
-      activeTest.config = serverTest.test.config;
-      activeTest.code = serverTest.code;
+    try {
+      const officialItems = await loadOfficialQuestionBank();
+      const questions = pickQuestions(config, officialItems);
+      const activeTest = { config, questions };
+      const serverTest = await apiPostJson("/api/tests", activeTest);
+      if (serverTest?.test) {
+        activeTest.config = serverTest.test.config;
+        activeTest.code = serverTest.code;
+      }
+      writeJson(STORAGE_KEYS.activeTest, activeTest);
+      localStorage.removeItem(STORAGE_KEYS.latestSubmission);
+      writeJson(STORAGE_KEYS.bankVersion, bankVersion);
+      renderTeacher();
+      renderTestInvite(activeTest, serverTest);
+      alert(serverTest?.code ? `測驗已建立。學生代碼：${serverTest.code}` : "測驗已建立。請開啟學生作答頁。");
+    } finally {
+      setButtonBusy(button, false);
     }
-    writeJson(STORAGE_KEYS.activeTest, activeTest);
-    localStorage.removeItem(STORAGE_KEYS.latestSubmission);
-    writeJson(STORAGE_KEYS.bankVersion, bankVersion);
-    renderTeacher();
-    renderTestInvite(activeTest, serverTest);
-    alert(serverTest?.code ? `測驗已建立。學生代碼：${serverTest.code}` : "測驗已建立。請開啟學生作答頁。");
   });
 
-  document.querySelector("#saveRecordBtn").addEventListener("click", saveLatestRecord);
-  document.querySelector("#saveLongNoteBtn").addEventListener("click", saveLongNote);
-  document.querySelector("#generateMaterialFromRecordBtn").addEventListener("click", generateMaterialFromRecord);
+  document.querySelector("#saveRecordBtn").addEventListener("click", withBusy(saveLatestRecord, "儲存中..."));
+  document.querySelector("#saveLongNoteBtn").addEventListener("click", withBusy(saveLongNote, "更新中..."));
+  document.querySelector("#generateMaterialFromRecordBtn").addEventListener("click", withBusy(generateMaterialFromRecord, "生成中..."));
   document.querySelector("#exportRecordBtn").addEventListener("click", exportRecord);
   document.querySelector("#syncSourcesBtn").addEventListener("click", syncOfficialSources);
-  document.querySelector("#refreshImportBtn").addEventListener("click", renderImportPanel);
+  document.querySelector("#refreshImportBtn").addEventListener("click", withBusy(renderImportPanel, "整理中..."));
   document.querySelector("#printTeachingBtn").addEventListener("click", () => window.print());
 
   renderSources();
@@ -330,7 +336,74 @@ function renderTestInvite(activeTest, serverTest) {
     <strong>學生測驗代碼：${escapeHtml(code)}</strong>
     <p>學生可輸入代碼，或直接開啟這個連結作答：</p>
     <p><a href="${url.toString()}" target="_blank" rel="noreferrer">${escapeHtml(url.toString())}</a></p>
+    <div class="invite-actions">
+      <a class="ghost-btn" href="${url.toString()}" target="_blank" rel="noreferrer">開啟學生頁</a>
+      <button class="ghost-btn copy-btn" type="button" data-copy="${escapeHtml(code)}">複製代碼</button>
+      <button class="primary-btn copy-btn" type="button" data-copy="${escapeHtml(url.toString())}">複製連結</button>
+    </div>
   `;
+  attachCopyButtons(box);
+}
+
+function withBusy(handler, label) {
+  return async (event) => {
+    const button = event.currentTarget;
+    setButtonBusy(button, true, label);
+    try {
+      await handler(event);
+    } finally {
+      setButtonBusy(button, false);
+    }
+  };
+}
+
+function setButtonBusy(button, busy, label = "處理中...") {
+  if (!button) return;
+  if (busy) {
+    button.dataset.originalText ||= button.textContent;
+    button.textContent = label;
+    button.disabled = true;
+    button.classList.add("is-loading");
+    return;
+  }
+  button.textContent = button.dataset.originalText || button.textContent;
+  button.disabled = false;
+  button.classList.remove("is-loading");
+}
+
+function attachCopyButtons(root = document) {
+  root.querySelectorAll(".copy-btn").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const value = button.dataset.copy || "";
+      const copied = await copyText(value);
+      const original = button.textContent;
+      button.textContent = copied ? "已複製" : "複製失敗";
+      setTimeout(() => {
+        button.textContent = original;
+      }, 1400);
+    });
+  });
+}
+
+async function copyText(value) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+      return true;
+    }
+  } catch {
+    // Fall back to a temporary input below.
+  }
+  const input = document.createElement("textarea");
+  input.value = value;
+  input.setAttribute("readonly", "");
+  input.style.position = "fixed";
+  input.style.opacity = "0";
+  document.body.append(input);
+  input.select();
+  const ok = document.execCommand("copy");
+  input.remove();
+  return ok;
 }
 
 async function loadOfficialQuestionBank() {
@@ -1375,15 +1448,27 @@ async function initStudent() {
   const questionList = document.querySelector("#questionList");
   const submitBtn = document.querySelector("#submitStudentBtn");
 
-  loadTestCodeBtn?.addEventListener("click", async () => {
+  loadTestCodeBtn?.addEventListener("click", async (event) => {
+    setButtonBusy(event.currentTarget, true, "載入中...");
     const code = testCodeInput.value.trim();
-    if (!code) return;
-    const next = await loadTestByCode(code);
-    if (!next) {
-      alert("找不到這組測驗代碼，請向老師確認。");
-      return;
+    try {
+      if (!code) return;
+      const next = await loadTestByCode(code);
+      if (!next) {
+        alert("找不到這組測驗代碼，請向老師確認。");
+        return;
+      }
+      location.href = `./student.html?code=${encodeURIComponent(code.toUpperCase())}`;
+    } finally {
+      setButtonBusy(event.currentTarget, false);
     }
-    location.href = `./student.html?code=${encodeURIComponent(code.toUpperCase())}`;
+  });
+
+  testCodeInput?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      loadTestCodeBtn?.click();
+    }
   });
 
   if (!active) {
@@ -1413,7 +1498,8 @@ async function initStudent() {
     </article>
   `).join("");
 
-  submitBtn.addEventListener("click", () => {
+  submitBtn.addEventListener("click", async () => {
+    setButtonBusy(submitBtn, true, "送出中...");
     const answers = {};
     active.questions.forEach((question) => {
       const selected = document.querySelector(`input[name="${question.id}"]:checked`);
@@ -1430,7 +1516,12 @@ async function initStudent() {
     submission.report = buildReport(submission);
     submission.teaching = buildTeaching(submission);
     writeJson(STORAGE_KEYS.latestSubmission, submission);
-    apiPost("/api/submissions", submission);
+    const saved = await apiPost("/api/submissions", submission);
+    if (!saved && location.protocol !== "file:") {
+      setButtonBusy(submitBtn, false);
+      alert("送出時網路不穩，請再試一次。");
+      return;
+    }
     questionList.classList.add("hidden");
     submitBtn.classList.add("hidden");
     doneBox.classList.remove("hidden");
