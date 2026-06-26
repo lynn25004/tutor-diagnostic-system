@@ -845,12 +845,16 @@ function renderReport(submission) {
   const content = document.querySelector("#reportContent");
   const emptyTeaching = document.querySelector("#emptyTeaching");
   const teachingContent = document.querySelector("#teachingContent");
+  const saveRecordBtn = document.querySelector("#saveRecordBtn");
+  const printTeachingBtn = document.querySelector("#printTeachingBtn");
 
   if (!submission) {
     empty.classList.remove("hidden");
     content.classList.add("hidden");
     emptyTeaching.classList.remove("hidden");
     teachingContent.classList.add("hidden");
+    if (saveRecordBtn) saveRecordBtn.disabled = true;
+    if (printTeachingBtn) printTeachingBtn.disabled = true;
     return;
   }
 
@@ -858,6 +862,8 @@ function renderReport(submission) {
   content.classList.remove("hidden");
   emptyTeaching.classList.add("hidden");
   teachingContent.classList.remove("hidden");
+  if (saveRecordBtn) saveRecordBtn.disabled = false;
+  if (printTeachingBtn) printTeachingBtn.disabled = false;
 
   document.querySelector("#scoreText").textContent = `${submission.report.accuracy}%`;
   document.querySelector("#levelText").textContent = submission.report.level;
@@ -1447,6 +1453,7 @@ async function initStudent() {
   const emptyQuiz = document.querySelector("#emptyQuiz");
   const questionList = document.querySelector("#questionList");
   const submitBtn = document.querySelector("#submitStudentBtn");
+  const answerProgress = document.querySelector("#answerProgress");
 
   loadTestCodeBtn?.addEventListener("click", async (event) => {
     setButtonBusy(event.currentTarget, true, "載入中...");
@@ -1473,10 +1480,14 @@ async function initStudent() {
 
   if (!active) {
     submitBtn.classList.add("hidden");
+    submitBtn.disabled = true;
+    answerProgress?.classList.add("hidden");
     return;
   }
 
   codeEntryBox?.classList.add("hidden");
+  submitBtn.classList.remove("hidden");
+  answerProgress?.classList.remove("hidden");
   document.querySelector("#quizStudent").textContent = active.config.studentName;
   document.querySelector("#quizScope").textContent = `${active.config.gradeLabel}・${active.config.subjectLabel}・${active.config.goalLabel}`;
   document.querySelector("#quizCount").textContent = String(active.questions.length);
@@ -1490,7 +1501,7 @@ async function initStudent() {
       <div class="option-grid">
         ${question.options.map((option) => `
           <label class="option-row">
-            <input type="radio" name="${question.id}" value="${escapeHtml(option)}">
+            <input type="radio" name="${question.id}" value="${escapeHtml(option)}" required>
             <span>${escapeHtml(option)}</span>
           </label>
         `).join("")}
@@ -1498,7 +1509,28 @@ async function initStudent() {
     </article>
   `).join("");
 
+  function updateAnswerProgress() {
+    const answered = active.questions.filter((question) => document.querySelector(`input[name="${question.id}"]:checked`)).length;
+    const total = active.questions.length;
+    const complete = answered === total;
+    if (answerProgress) {
+      answerProgress.textContent = complete
+        ? `已完成 ${answered}/${total} 題，可以送出。`
+        : `已作答 ${answered}/${total} 題，還有 ${total - answered} 題。`;
+      answerProgress.classList.toggle("is-complete", complete);
+    }
+    submitBtn.disabled = !complete;
+    return complete;
+  }
+
+  questionList.addEventListener("change", updateAnswerProgress);
+  updateAnswerProgress();
+
   submitBtn.addEventListener("click", async () => {
+    if (!updateAnswerProgress()) {
+      alert("請完成所有題目後再送出。");
+      return;
+    }
     setButtonBusy(submitBtn, true, "送出中...");
     const answers = {};
     active.questions.forEach((question) => {
@@ -1519,11 +1551,13 @@ async function initStudent() {
     const saved = await apiPost("/api/submissions", submission);
     if (!saved && location.protocol !== "file:") {
       setButtonBusy(submitBtn, false);
+      updateAnswerProgress();
       alert("送出時網路不穩，請再試一次。");
       return;
     }
     questionList.classList.add("hidden");
     submitBtn.classList.add("hidden");
+    answerProgress?.classList.add("hidden");
     doneBox.classList.remove("hidden");
   });
 }
@@ -1604,6 +1638,12 @@ async function renderRecords() {
   const historyList = document.querySelector("#historyList");
   const longNote = document.querySelector("#longNote");
   if (!select) return;
+  const hasRecords = records.length > 0;
+
+  document.querySelector("#saveLongNoteBtn").disabled = !hasRecords;
+  document.querySelector("#generateMaterialFromRecordBtn").disabled = !hasRecords;
+  document.querySelector("#exportRecordBtn").disabled = !hasRecords;
+  if (longNote) longNote.disabled = !hasRecords;
 
   select.innerHTML = records.length
     ? records.map((record) => `<option value="${record.id}">${escapeHtml(record.studentName)}｜${escapeHtml(record.gradeLabel)}</option>`).join("")

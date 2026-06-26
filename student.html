@@ -47,12 +47,13 @@
             <p class="eyebrow">Quiz</p>
             <h2>測驗題目</h2>
           </div>
-          <button id="submitStudentBtn" class="primary-btn" type="button">送出答案</button>
+          <button id="submitStudentBtn" class="primary-btn hidden" type="button" disabled>送出答案</button>
         </div>
+        <div id="answerProgress" class="answer-progress hidden" aria-live="polite"></div>
         <div id="codeEntryBox" class="notice">
           <strong>輸入測驗代碼</strong>
           <div class="code-entry">
-            <input id="testCodeInput" type="text" placeholder="例如：A1B2C3" autocomplete="off">
+            <input id="testCodeInput" type="text" placeholder="例如：A1B2C3" autocomplete="off" maxlength="12">
             <button id="loadTestCodeBtn" class="primary-btn" type="button">載入測驗</button>
           </div>
         </div>
